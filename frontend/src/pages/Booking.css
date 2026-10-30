@@ -1,0 +1,133 @@
+.booking-page {
+    min-height: 100vh;
+    padding: 40px 20px;
+    background: #0b1120;
+    color: #f1f5f9;
+    font-family: Inter, system-ui, sans-serif;
+}
+
+.booking-back {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    max-width: 520px;
+    margin: 0 auto 22px;
+    color: #93c5fd;
+    text-decoration: none;
+}
+
+.booking-card {
+    max-width: 520px;
+    margin: auto;
+    padding: 32px;
+    background: #151f32;
+    border: 1px solid #29374d;
+    border-radius: 15px;
+}
+
+.booking-heading-icon {
+    width: 55px;
+    height: 55px;
+    display: grid;
+    place-items: center;
+    color: #60a5fa;
+    background: #1e3a5f;
+    border-radius: 11px;
+    margin-bottom: 20px;
+}
+
+.booking-eyebrow {
+    color: #60a5fa;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+}
+
+.booking-card h1 {
+    margin: 10px 0;
+}
+
+.booking-resource-name {
+    color: #94a3b8;
+    margin-bottom: 25px;
+}
+
+.booking-card form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.booking-card label {
+    margin-top: 8px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.booking-card input,
+.booking-card textarea {
+    width: 100%;
+    padding: 13px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    color: white;
+    font: inherit;
+    color-scheme: dark;
+}
+
+.booking-card textarea {
+    resize: vertical;
+}
+
+.booking-card input:focus,
+.booking-card textarea:focus {
+    outline: none;
+    border-color: #60a5fa;
+}
+
+.booking-card form button,
+.success-card button {
+    padding: 14px;
+    margin-top: 12px;
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.booking-error {
+    color: #f87171;
+    font-size: 13px;
+}
+
+.success-card {
+    text-align: center;
+    padding: 45px 30px;
+}
+
+.success-card>svg {
+    margin-bottom: 18px;
+}
+
+.success-card p {
+    color: #94a3b8;
+    line-height: 1.6;
+}
+
+.booking-demo-warning {
+    font-size: 12px;
+    color: #fbbf24 !important;
+}
+
+.success-card button {
+    width: 100%;
+}
+
+@media (max-width: 500px) {
+    .booking-card {
+        padding: 23px;
+    }
+}
