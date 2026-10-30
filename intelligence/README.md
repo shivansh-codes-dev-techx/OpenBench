@@ -57,6 +57,10 @@ The weights remain category 35%, purpose 25%, availability 20%, location 10%, an
 
 The function is a pure recommendation helper and has no dependency on OpenBench's authentication, booking lifecycle, database, or API. Call it after the backend has loaded candidate resources and user eligibility. Treat results as suggestions; recheck eligibility and availability in the authoritative booking flow and require owner review where applicable. If unavailable, the rest of OpenBench works without this module.
 
+## Backend adapter
+
+`intelligence.adapter.recommend_backend_resources` accepts backend-shaped resource, booking, requirement, and qualification records. Pass `requirements_by_resource` and `bookings_by_resource` keyed by resource ID, plus the requested timezone-aware `requested_start` and `requested_end`. It maps backend `title`-era resources without changing the backend models, excludes inactive resources, calculates availability from overlapping `APPROVED`/`IN_USE` bookings, and uses only `VERIFIED` qualifications. Keep the backend eligibility and booking approval checks authoritative.
+
 ## Tests
 
 Run from this directory: `python -m unittest discover -s intelligence/tests -v`.
