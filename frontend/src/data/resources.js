@@ -1,0 +1,58 @@
+
+import {
+    Laptop,
+    Monitor,
+    Camera,
+    Armchair,
+} from "lucide-react";
+
+export const resources = [
+    {
+        id: 1,
+        name: "MacBook Pro",
+        category: "Electronics",
+        location: "Computer Lab, Block A",
+        type: "EQUIPMENT",
+        available: true,
+        icon: Laptop,
+        description: "High-performance laptop available for student projects.",
+        owner: "Computer Lab Department",
+        rules: "Use for academic purposes only. Handle carefully and return on time.",
+    },
+    {
+        id: 2,
+        name: "Projector",
+        category: "Electronics",
+        location: "Seminar Hall",
+        type: "EQUIPMENT",
+        available: true,
+        icon: Monitor,
+        description: "Projector available for presentations and academic activities.",
+        owner: "Seminar Hall Department",
+        rules: "Handle carefully and return the projector after use.",
+    },
+    {
+        id: 3,
+        name: "DSLR Camera",
+        category: "Photography",
+        location: "Media Department",
+        type: "EQUIPMENT",
+        available: false,
+        icon: Camera,
+        description: "DSLR camera for photography and media projects.",
+        owner: "Media Department",
+        rules: "Use only for approved academic photography activities.",
+    },
+    {
+        id: 4,
+        name: "Study Room",
+        category: "Campus Space",
+        location: "Library, Floor 2",
+        type: "SPACE",
+        available: true,
+        icon: Armchair,
+        description: "Quiet study space for individual and group learning.",
+        owner: "Library Department",
+        rules: "Keep the room clean and maintain silence.",
+    },
+];

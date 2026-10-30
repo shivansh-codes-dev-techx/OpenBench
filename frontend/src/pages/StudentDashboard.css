@@ -1,0 +1,776 @@
+/* ================================
+   OPENBENCH — STUDENT DASHBOARD
+   Warm White + Modern Blue Theme
+   Floating Glass Navigation
+================================ */
+
+:root {
+    --ob-bg: #faf9f6;
+    --ob-card: #ffffff;
+    --ob-blue: #2563eb;
+    --ob-blue-hover: #1d4ed8;
+    --ob-blue-light: #eaf1ff;
+    --ob-navy: #1e3a5f;
+    --ob-text: #172b4d;
+    --ob-muted: #64748b;
+    --ob-border: #e5eaf2;
+    --ob-green: #15803d;
+    --ob-red: #dc2626;
+    --ob-shadow: 0 4px 18px rgba(30, 58, 95, 0.05);
+}
+
+/* ================================
+   GLOBAL DASHBOARD
+================================ */
+
+.dashboard {
+    position: relative;
+    display: block;
+    width: 100%;
+    min-height: 100vh;
+    background: var(--ob-bg);
+    color: var(--ob-text);
+    font-family: Inter, system-ui, sans-serif;
+    overflow: visible;
+}
+
+/* ================================
+   FLOATING HAMBURGER BUTTON
+================================ */
+
+.ob-menu-btn {
+    position: fixed;
+    top: 24px;
+    left: 24px;
+    z-index: 10002;
+    width: 54px;
+    height: 54px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    box-shadow: 0 6px 24px rgba(15, 23, 42, 0.12);
+    cursor: pointer;
+    transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+
+.ob-menu-btn:hover {
+    background: #ffffff;
+    box-shadow: 0 8px 28px rgba(37, 99, 235, 0.15);
+}
+
+.ob-menu-btn span {
+    display: block;
+    width: 22px;
+    height: 2px;
+    border-radius: 5px;
+    background: #1c2430;
+    transition: transform 0.25s ease, opacity 0.2s ease;
+}
+
+.ob-menu-btn.is-open span:nth-child(1) {
+    transform: translateY(7px) rotate(45deg);
+}
+
+.ob-menu-btn.is-open span:nth-child(2) {
+    opacity: 0;
+}
+
+.ob-menu-btn.is-open span:nth-child(3) {
+    transform: translateY(-7px) rotate(-45deg);
+}
+
+/* ================================
+   BACKGROUND OVERLAY
+================================ */
+
+.ob-nav-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: rgba(15, 23, 42, 0.25);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+
+.ob-nav-scrim.visible {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+}
+
+/* ================================
+   FLOATING GLASS SIDEBAR
+================================ */
+
+.ob-sidebar {
+    position: fixed;
+    top: 92px;
+    left: 24px;
+    bottom: 24px;
+    z-index: 10001;
+    width: 270px;
+    max-width: calc(100vw - 48px);
+    display: flex;
+    flex-direction: column;
+    padding: 28px 15px 20px;
+    overflow-y: auto;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.95);
+    border-radius: 24px;
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.16);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateX(-18px);
+    transition:
+        opacity 0.25s ease,
+        transform 0.25s ease,
+        visibility 0.25s ease;
+}
+
+.ob-sidebar.visible {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateX(0);
+}
+
+/* BRAND */
+
+.ob-brand {
+    display: block;
+    margin-bottom: 38px;
+    color: var(--ob-blue);
+    font-size: 25px;
+    font-weight: 800;
+    text-align: center;
+    text-decoration: none;
+}
+
+.ob-menu-label {
+    margin: 0 0 14px;
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-align: center;
+}
+
+/* ================================
+   NAVIGATION LINKS
+================================ */
+
+.ob-links {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+.ob-item {
+    width: 100%;
+    min-height: 54px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 15px;
+    border: none;
+    border-radius: 13px;
+    background: transparent;
+    color: var(--ob-muted);
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition:
+        background 0.2s ease,
+        color 0.2s ease,
+        box-shadow 0.2s ease;
+}
+
+/* Only the active button is dark blue */
+.ob-item.active {
+    background: linear-gradient(135deg, #2563eb, #1e3a8a);
+    color: #ffffff;
+    box-shadow: 0 7px 18px rgba(37, 99, 235, 0.2);
+}
+
+/* Inactive buttons get a light hover background */
+.ob-item:not(.active):hover {
+    background: #eff6ff;
+    color: var(--ob-blue);
+    box-shadow: none;
+}
+
+.ob-item svg {
+    flex-shrink: 0;
+}
+
+/* SIDEBAR PROFILE */
+
+.ob-sidebar-bottom {
+    margin-top: auto;
+    padding-top: 20px;
+}
+
+.ob-profile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 8px;
+    border-top: 1px solid var(--ob-border);
+}
+
+.ob-avatar {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--ob-blue-light);
+    color: var(--ob-blue);
+    font-weight: 700;
+}
+
+.ob-profile strong,
+.ob-profile span {
+    display: block;
+}
+
+.ob-profile strong {
+    color: var(--ob-text);
+    font-size: 13px;
+}
+
+.ob-profile span {
+    margin-top: 3px;
+    color: var(--ob-muted);
+    font-size: 11px;
+}
+
+/* LOGOUT */
+
+.ob-logout {
+    width: 100%;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    padding: 12px;
+    border: 1px solid var(--ob-border);
+    border-radius: 12px;
+    background: #ffffff;
+    color: var(--ob-red);
+    font-family: inherit;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.ob-logout:hover {
+    background: #fef2f2;
+    border-color: #fecaca;
+}
+
+/* ================================
+   MAIN DASHBOARD CONTENT
+================================ */
+
+.dashboard-main {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    margin: 0;
+    padding: 40px 40px 50px 105px;
+    box-sizing: border-box;
+}
+
+#overview,
+#resources,
+#bookings {
+    scroll-margin-top: 30px;
+}
+
+.dashboard-header h1 {
+    font-size: 30px;
+    margin: 12px 0;
+    color: var(--ob-text);
+}
+
+.eyebrow {
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    font-weight: 700;
+    color: #8492a6;
+}
+
+.muted {
+    color: var(--ob-muted);
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+/* ================================
+   STATISTICS
+================================ */
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+    margin: 35px 0 48px;
+}
+
+.stat-card {
+    background: var(--ob-card);
+    border: 1px solid var(--ob-border);
+    border-radius: 13px;
+    padding: 22px;
+    box-shadow: var(--ob-shadow);
+}
+
+.stat-card span {
+    color: var(--ob-muted);
+    font-size: 13px;
+}
+
+.stat-card h2 {
+    font-size: 30px;
+    margin: 14px 0 5px;
+    color: var(--ob-blue);
+}
+
+.stat-card p {
+    color: var(--ob-muted);
+    font-size: 12px;
+}
+
+/* ================================
+   RESOURCE MARKETPLACE
+================================ */
+
+.section-heading h2,
+.booking-preview h2 {
+    margin: 8px 0;
+    color: var(--ob-text);
+}
+
+.resource-toolbar {
+    display: flex;
+    gap: 15px;
+    margin: 25px 0;
+}
+
+.search-box {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #ffffff;
+    border: 1px solid var(--ob-border);
+    border-radius: 9px;
+    padding: 0 14px;
+    color: var(--ob-muted);
+}
+
+.search-box:focus-within {
+    border-color: var(--ob-blue);
+    box-shadow: 0 0 0 3px #2563eb15;
+}
+
+.search-box input {
+    width: 100%;
+    min-width: 0;
+    padding: 14px 0;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--ob-text);
+}
+
+.search-box input::placeholder {
+    color: #94a3b8;
+}
+
+.resource-toolbar select {
+    background: #ffffff;
+    border: 1px solid var(--ob-border);
+    color: var(--ob-text);
+    border-radius: 9px;
+    padding: 0 15px;
+    outline: none;
+}
+
+.resource-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.resource-card {
+    min-width: 0;
+    padding: 22px;
+    background: #ffffff;
+    border: 1px solid var(--ob-border);
+    border-radius: 13px;
+    box-shadow: var(--ob-shadow);
+    transition: 0.2s ease;
+}
+
+.resource-card:hover {
+    transform: translateY(-3px);
+    border-color: #bfdbfe;
+    box-shadow: 0 8px 24px rgba(37, 99, 235, 0.08);
+}
+
+.resource-icon {
+    width: 52px;
+    height: 52px;
+    display: grid;
+    place-items: center;
+    color: var(--ob-blue);
+    background: var(--ob-blue-light);
+    border-radius: 11px;
+    margin-bottom: 18px;
+}
+
+.resource-category {
+    color: var(--ob-blue);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.resource-card h3 {
+    margin: 8px 0;
+    color: var(--ob-text);
+}
+
+.resource-location {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--ob-muted);
+    font-size: 12px;
+}
+
+.resource-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 25px;
+}
+
+.availability {
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.available {
+    color: var(--ob-green);
+}
+
+.unavailable {
+    color: var(--ob-red);
+}
+
+.resource-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 9px 12px;
+    border: none;
+    border-radius: 7px;
+    background: var(--ob-blue);
+    color: #ffffff;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.resource-action:hover {
+    background: var(--ob-blue-hover);
+}
+
+.resource-action:disabled {
+    background: #94a3b8;
+    cursor: not-allowed;
+}
+
+/* ================================
+   BOOKING HISTORY
+================================ */
+
+.booking-preview {
+    margin-top: 50px;
+    padding: 25px;
+    border: 1px solid var(--ob-border);
+    background: #ffffff;
+    border-radius: 13px;
+    box-shadow: var(--ob-shadow);
+}
+
+.booking-placeholder {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 20px;
+    padding: 16px;
+    background: #f5f8fd;
+    border-radius: 9px;
+    color: var(--ob-muted);
+    font-size: 13px;
+}
+
+.booking-status-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 20px 0;
+}
+
+.booking-status-summary span {
+    padding: 7px 12px;
+    border-radius: 20px;
+    background: var(--ob-blue-light);
+    color: var(--ob-navy);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.booking-list {
+    display: grid;
+    gap: 15px;
+    margin-top: 20px;
+}
+
+.booking-item {
+    min-width: 0;
+    padding: 20px;
+    background: #ffffff;
+    border: 1px solid var(--ob-border);
+    border-radius: 11px;
+}
+
+.booking-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 15px;
+}
+
+.booking-id {
+    color: var(--ob-blue);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.booking-item h3 {
+    margin: 7px 0;
+    color: var(--ob-text);
+}
+
+.booking-item>p {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ob-muted);
+    font-size: 13px;
+    margin: 9px 0;
+}
+
+.booking-purpose,
+.booking-reason {
+    line-height: 1.6;
+}
+
+.booking-status {
+    padding: 6px 11px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.booking-status.approved {
+    color: #15803d;
+    background: #dcfce7;
+}
+
+.booking-status.pending {
+    color: #a16207;
+    background: #fef3c7;
+}
+
+.booking-status.rejected {
+    color: #b91c1c;
+    background: #fee2e2;
+}
+
+.booking-status.unknown {
+    color: #475569;
+    background: #e2e8f0;
+}
+
+/* ================================
+   BOOKING LIFECYCLE ACTIONS
+================================ */
+
+.booking-lifecycle-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--ob-border);
+}
+
+.booking-lifecycle-actions .resource-action {
+    display: inline-flex;
+}
+
+.booking-lifecycle-actions .muted {
+    width: 100%;
+    font-size: 13px;
+    margin: 0;
+}
+
+.lifecycle-complete {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ob-green);
+    font-size: 14px;
+    margin-top: 12px;
+}
+
+/* ================================
+   FOOTER AND EMPTY STATES
+================================ */
+
+.demo-note {
+    margin-top: 30px;
+    color: #94a3b8;
+    font-size: 11px;
+}
+
+.empty-state {
+    color: var(--ob-muted);
+}
+
+/* ================================
+   RESPONSIVE TABLET
+================================ */
+
+@media (max-width: 850px) {
+    .dashboard-main {
+        padding: 95px 25px 40px;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .resource-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ================================
+   RESPONSIVE MOBILE
+================================ */
+
+@media (max-width: 600px) {
+    .ob-menu-btn {
+        top: 16px;
+        left: 16px;
+        width: 48px;
+        height: 48px;
+    }
+
+    .ob-sidebar {
+        top: 76px;
+        left: 16px;
+        bottom: 16px;
+        width: 270px;
+        max-width: calc(100vw - 32px);
+    }
+
+    .dashboard-main {
+        padding: 85px 18px 35px;
+    }
+
+    .dashboard-header h1 {
+        font-size: 25px;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr;
+        gap: 13px;
+        margin: 25px 0 35px;
+    }
+
+    .resource-toolbar {
+        flex-direction: column;
+    }
+
+    .resource-toolbar select {
+        min-height: 45px;
+        padding: 0 13px;
+    }
+
+    .resource-card-footer {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .booking-preview {
+        padding: 18px;
+    }
+
+    .booking-item {
+        padding: 16px;
+    }
+
+    .booking-item-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .booking-lifecycle-actions {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}
+
+/* ================================
+   ACCESSIBILITY
+================================ */
+
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+    }
+}
