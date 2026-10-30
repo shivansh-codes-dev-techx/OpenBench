@@ -32,6 +32,12 @@ from app.schemas.auth import (
     AuthResponse,
     CurrentUserResponse,
 )
+from app.schemas.eligibility import (
+    EligibilityRequirementCreate,
+    EligibilityRequirementResponse,
+    EligibilityCheckItem,
+    EligibilityCheckResponse,
+)
 
 __all__ = [
     "UserRegister",
