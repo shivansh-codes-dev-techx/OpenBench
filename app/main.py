@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.routers import resources
 from app.routers import eligibility
-
+from app.routers import bookings
 app = FastAPI(
     title="OpenBench API",
     description="Trusted Campus Resource Sharing Platform",
@@ -35,6 +35,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(resources.router)
 app.include_router(eligibility.router)
+app.include_router(bookings.router)
 
 @app.get("/")
 def root():
