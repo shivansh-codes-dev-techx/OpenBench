@@ -2,13 +2,14 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from app.database import engine
+from app.routers import auth
 
 app = FastAPI(
     title="OpenBench API",
     description="Trusted Campus Resource Sharing Platform",
     version="1.0.0",
 )
-
+app.include_router(auth.router)
 
 @app.get("/")
 def root():
