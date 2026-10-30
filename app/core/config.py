@@ -11,6 +11,10 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=True,
     )
+    CORS_ORIGINS: str = (
+    "http://localhost:5173,"
+    "http://127.0.0.1:5173"
+    )
 
 
 settings = Settings()
