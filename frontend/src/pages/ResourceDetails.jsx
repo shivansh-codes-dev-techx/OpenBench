@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import {
@@ -26,17 +26,29 @@ function getResourceIcon(resource) {
     const category = resource?.category?.toLowerCase() || "";
     const title = resource?.title?.toLowerCase() || "";
 
-    if (type === "SPACE") return Armchair;
+    if (type === "SPACE") return <Armchair size={42} />;
 
     if (title.includes("camera") || category.includes("photography")) {
-        return Camera;
+        return <Camera size={42} />;
     }
 
     if (title.includes("projector") || title.includes("monitor")) {
-        return Monitor;
+        return <Monitor size={42} />;
     }
 
-    return Laptop;
+    return <Laptop size={42} />;
+}
+
+function formatDate(date) {
+    if (!date) return "Not specified";
+
+    const parsedDate = new Date(date);
+
+    if (Number.isNaN(parsedDate.getTime())) {
+        return "Not specified";
+    }
+
+    return parsedDate.toLocaleString();
 }
 
 export default function ResourceDetails() {
@@ -45,19 +57,22 @@ export default function ResourceDetails() {
     const [resource, setResource] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [retryCount, setRetryCount] = useState(0);
 
-    async function fetchResource() {
+    const fetchResource = useCallback(async (signal) => {
         try {
-            setLoading(true);
             setError("");
 
             const response = await fetch(
-                `${API_BASE_URL}/resources/${id}`
+                `${API_BASE_URL}/resources/${id}`,
+                { signal }
             );
 
             if (response.status === 404) {
                 setResource(null);
-                setError("This resource could not be found or is no longer available.");
+                setError(
+                    "This resource could not be found or is no longer available."
+                );
                 return;
             }
 
@@ -69,22 +84,44 @@ export default function ResourceDetails() {
 
             const data = await response.json();
             setResource(data);
-
         } catch (err) {
+            if (err.name === "AbortError") return;
+
             console.error("Resource details error:", err);
+
             setError(
                 err.message || "Unable to connect to the server."
             );
-        } finally {
-            setLoading(false);
         }
-    }
-
-    useEffect(() => {
-        fetchResource();
     }, [id]);
 
-    // Loading state
+    useEffect(() => {
+        const controller = new AbortController();
+
+        async function loadResource() {
+            setLoading(true);
+
+            try {
+                await fetchResource(controller.signal);
+            } finally {
+                if (!controller.signal.aborted) {
+                    setLoading(false);
+                }
+            }
+        }
+
+        loadResource();
+
+        return () => {
+            controller.abort();
+        };
+    }, [fetchResource, retryCount]);
+
+    function handleRetry() {
+        setLoading(true);
+        setRetryCount((previous) => previous + 1);
+    }
+
     if (loading) {
         return (
             <main className="details-page">
@@ -95,7 +132,6 @@ export default function ResourceDetails() {
         );
     }
 
-    // Error or resource not found
     if (error || !resource) {
         return (
             <main className="details-page">
@@ -110,7 +146,7 @@ export default function ResourceDetails() {
                 {error && !error.includes("could not be found") && (
                     <button
                         className="book-resource-button"
-                        onClick={fetchResource}
+                        onClick={handleRetry}
                     >
                         <RefreshCw size={18} />
                         Try Again
@@ -128,23 +164,8 @@ export default function ResourceDetails() {
         );
     }
 
-    const ResourceIcon = getResourceIcon(resource);
-
-    const formatDate = (date) => {
-        if (!date) return "Not specified";
-
-        const parsedDate = new Date(date);
-
-        if (Number.isNaN(parsedDate.getTime())) {
-            return "Not specified";
-        }
-
-        return parsedDate.toLocaleString();
-    };
-
     return (
         <main className="details-page">
-
             <Link
                 to="/student/dashboard"
                 className="back-link"
@@ -154,9 +175,8 @@ export default function ResourceDetails() {
             </Link>
 
             <section className="details-card">
-
                 <div className="details-icon">
-                    <ResourceIcon size={42} />
+                    {getResourceIcon(resource)}
                 </div>
 
                 <span className="details-category">
@@ -170,9 +190,7 @@ export default function ResourceDetails() {
                         `Explore the ${resource.title} available at ${resource.location}.`}
                 </p>
 
-                {/* RESOURCE INFORMATION */}
                 <div className="details-info">
-
                     <div>
                         <MapPin size={19} />
                         <span>{resource.location}</span>
@@ -185,12 +203,12 @@ export default function ResourceDetails() {
 
                     <div>
                         <ShieldCheck size={19} />
-                        <span>Resource Owner ID: {resource.owner_id}</span>
+                        <span>
+                            Resource Owner ID: {resource.owner_id}
+                        </span>
                     </div>
-
                 </div>
 
-                {/* USAGE RULES */}
                 <div className="details-rules">
                     <h3>Usage Rules</h3>
 
@@ -200,7 +218,6 @@ export default function ResourceDetails() {
                     </p>
                 </div>
 
-                {/* AVAILABILITY */}
                 <div className="details-rules">
                     <h3>Availability Information</h3>
 
@@ -214,14 +231,11 @@ export default function ResourceDetails() {
                 </div>
 
                 <div className="details-availability">
-
                     <span className="details-available">
                         Available
                     </span>
-
                 </div>
 
-                {/* BOOKING BUTTON */}
                 {resource.is_active && (
                     <Link
                         to={`/book/${resource.id}`}
@@ -231,7 +245,6 @@ export default function ResourceDetails() {
                         Request Booking
                     </Link>
                 )}
-
             </section>
         </main>
     );

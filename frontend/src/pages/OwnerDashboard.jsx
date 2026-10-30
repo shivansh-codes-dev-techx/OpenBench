@@ -1,5 +1,5 @@
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -20,7 +20,7 @@ import {
     RefreshCw,
 } from "lucide-react";
 
-import { useAuth } from "../context/AuthContext";
+import { useAuth } from "../context/useAuth";
 import { apiRequest } from "../api/client";
 import "./OwnerDashboard.css";
 
@@ -38,9 +38,7 @@ function getResourceIcon(resource) {
 
 function formatDate(value) {
     if (!value) return "Not available";
-
     const date = new Date(value);
-
     if (Number.isNaN(date.getTime())) return "Not available";
 
     return date.toLocaleDateString("en-IN", {
@@ -52,9 +50,7 @@ function formatDate(value) {
 
 function formatTime(value) {
     if (!value) return "Not available";
-
     const date = new Date(value);
-
     if (Number.isNaN(date.getTime())) return "Not available";
 
     return date.toLocaleTimeString("en-IN", {
@@ -72,7 +68,6 @@ export default function OwnerDashboard() {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
 
-    // Navigation state
     const [isNavOpen, setIsNavOpen] = useState(false);
     const [activeNav, setActiveNav] = useState("overview");
     const [highlightStyle, setHighlightStyle] = useState({
@@ -82,10 +77,8 @@ export default function OwnerDashboard() {
 
     const navRef = useRef(null);
 
-    // Dashboard state
     const [resources, setResources] = useState([]);
     const [requests, setRequests] = useState([]);
-
     const [search, setSearch] = useState("");
     const [showForm, setShowForm] = useState(false);
 
@@ -108,7 +101,6 @@ export default function OwnerDashboard() {
         usage_rules: "",
     });
 
-    // Move the animated blue highlight.
     function moveHighlight(element) {
         if (!element || !navRef.current) return;
 
@@ -118,35 +110,25 @@ export default function OwnerDashboard() {
         });
     }
 
-    // Navigate to a dashboard section.
     function handleNavClick(id) {
         setActiveNav(id);
         setIsNavOpen(false);
 
-        const section = document.getElementById(id);
-
-        section?.scrollIntoView({
+        document.getElementById(id)?.scrollIntoView({
             behavior: "smooth",
             block: "start",
         });
     }
 
-    // Keyboard support.
     useEffect(() => {
         function handleEscape(event) {
-            if (event.key === "Escape") {
-                setIsNavOpen(false);
-            }
+            if (event.key === "Escape") setIsNavOpen(false);
         }
 
         window.addEventListener("keydown", handleEscape);
-
-        return () => {
-            window.removeEventListener("keydown", handleEscape);
-        };
+        return () => window.removeEventListener("keydown", handleEscape);
     }, []);
 
-    // Position highlight on the active item when menu opens.
     useEffect(() => {
         if (!isNavOpen) return;
 
@@ -154,42 +136,103 @@ export default function OwnerDashboard() {
             `[data-nav-id="${activeNav}"]`
         );
 
-        if (activeElement) {
-            moveHighlight(activeElement);
-        }
+        if (activeElement) moveHighlight(activeElement);
     }, [isNavOpen, activeNav]);
 
-    // Load resources belonging to the logged-in owner.
-    async function fetchResources() {
-        try {
-            setLoadingResources(true);
-            setResourceError("");
+    // Initial data loading: state updates occur after the API responses.
+    useEffect(() => {
+        if (!user?.id) return;
 
+        let cancelled = false;
+
+        async function loadDashboard() {
+            const resourceRequest = apiRequest("/resources?skip=0&limit=100")
+                .then((response) => {
+                    if (!Array.isArray(response)) {
+                        throw new Error("Unexpected resources response from server.");
+                    }
+
+                    if (!cancelled) {
+                        setResources(
+                            response.filter(
+                                (resource) =>
+                                    Number(resource.owner_id) === Number(user.id)
+                            )
+                        );
+                        setResourceError("");
+                    }
+                })
+                .catch((error) => {
+                    console.error("Owner resources error:", error);
+                    if (!cancelled) {
+                        setResourceError(
+                            error.message || "Unable to load resources."
+                        );
+                    }
+                })
+                .finally(() => {
+                    if (!cancelled) setLoadingResources(false);
+                });
+
+            const bookingRequest = apiRequest("/bookings/owner")
+                .then((response) => {
+                    const bookingData = response.data ?? response;
+
+                    if (!Array.isArray(bookingData)) {
+                        throw new Error("Unexpected booking response from server.");
+                    }
+
+                    if (!cancelled) {
+                        setRequests(bookingData);
+                        setRequestError("");
+                    }
+                })
+                .catch((error) => {
+                    console.error("Owner booking error:", error);
+                    if (!cancelled) {
+                        setRequestError(
+                            error.message || "Unable to load booking requests."
+                        );
+                    }
+                })
+                .finally(() => {
+                    if (!cancelled) setLoadingRequests(false);
+                });
+
+            await Promise.all([resourceRequest, bookingRequest]);
+        }
+
+        void loadDashboard();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [user?.id]);
+
+    const fetchResources = useCallback(async () => {
+        try {
             const response = await apiRequest("/resources?skip=0&limit=100");
 
             if (!Array.isArray(response)) {
                 throw new Error("Unexpected resources response from server.");
             }
 
-            const ownerResources = response.filter(
-                (resource) => Number(resource.owner_id) === Number(user?.id)
+            setResources(
+                response.filter(
+                    (resource) => Number(resource.owner_id) === Number(user?.id)
+                )
             );
-
-            setResources(ownerResources);
+            setResourceError("");
         } catch (error) {
             console.error("Owner resources error:", error);
             setResourceError(error.message || "Unable to load resources.");
         } finally {
             setLoadingResources(false);
         }
-    }
+    }, [user?.id]);
 
-    // Load booking requests for this owner.
-    async function fetchRequests() {
+    const fetchRequests = useCallback(async () => {
         try {
-            setLoadingRequests(true);
-            setRequestError("");
-
             const response = await apiRequest("/bookings/owner");
             const bookingData = response.data ?? response;
 
@@ -198,22 +241,15 @@ export default function OwnerDashboard() {
             }
 
             setRequests(bookingData);
+            setRequestError("");
         } catch (error) {
             console.error("Owner booking error:", error);
             setRequestError(error.message || "Unable to load booking requests.");
         } finally {
             setLoadingRequests(false);
         }
-    }
+    }, []);
 
-    useEffect(() => {
-        if (user?.id) {
-            fetchResources();
-            fetchRequests();
-        }
-    }, [user?.id]);
-
-    // Search resources.
     const filteredResources = resources.filter((resource) =>
         resource.title?.toLowerCase().includes(search.toLowerCase())
     );
@@ -226,7 +262,6 @@ export default function OwnerDashboard() {
         (request) => request.status?.toUpperCase() === "APPROVED"
     ).length;
 
-    // Create resource through backend.
     async function handleAddResource(event) {
         event.preventDefault();
 
@@ -260,7 +295,7 @@ export default function OwnerDashboard() {
 
             setShowForm(false);
             setSuccessMessage("Resource published successfully.");
-
+            setLoadingResources(true);
             await fetchResources();
         } catch (error) {
             console.error("Create resource error:", error);
@@ -270,15 +305,11 @@ export default function OwnerDashboard() {
         }
     }
 
-    // Approve or reject a booking through backend.
     async function handleRequest(bookingId, decision) {
         let reason = null;
 
         if (decision === "REJECTED") {
-            reason = window.prompt(
-                "Enter a rejection reason (optional):"
-            );
-
+            reason = window.prompt("Enter a rejection reason (optional):");
             if (reason === null) return;
         }
 
@@ -299,6 +330,7 @@ export default function OwnerDashboard() {
                 `Booking #${bookingId} ${decision.toLowerCase()} successfully.`
             );
 
+            setLoadingRequests(true);
             await fetchRequests();
         } catch (error) {
             console.error("Booking decision error:", error);
@@ -314,16 +346,11 @@ export default function OwnerDashboard() {
     }
 
     const resourceMap = new Map(
-        resources.map((resource) => [
-            Number(resource.id),
-            resource,
-        ])
+        resources.map((resource) => [Number(resource.id), resource])
     );
 
     return (
         <div className="owner-dashboard">
-
-            {/* ANIMATED HAMBURGER BUTTON */}
             <button
                 type="button"
                 className={`ob-menu-btn ${isNavOpen ? "is-open" : ""}`}
@@ -337,21 +364,18 @@ export default function OwnerDashboard() {
                 <span />
             </button>
 
-            {/* BACKGROUND OVERLAY */}
             <div
                 className={`ob-nav-scrim ${isNavOpen ? "visible" : ""}`}
                 onClick={() => setIsNavOpen(false)}
                 aria-hidden="true"
             />
 
-            {/* ANIMATED GLASS NAVIGATION */}
             <aside
                 className={`ob-sidebar ${isNavOpen ? "visible" : ""}`}
                 id="owner-navigation"
                 aria-label="Owner navigation"
             >
                 <div className="ob-brand">OpenBench.</div>
-
                 <p className="ob-menu-label">OWNER PORTAL</p>
 
                 <nav className="ob-links" ref={navRef}>
@@ -367,12 +391,8 @@ export default function OwnerDashboard() {
                         type="button"
                         className={`ob-item ${activeNav === "overview" ? "active" : ""}`}
                         data-nav-id="overview"
-                        onMouseEnter={(event) =>
-                            moveHighlight(event.currentTarget)
-                        }
-                        onFocus={(event) =>
-                            moveHighlight(event.currentTarget)
-                        }
+                        onMouseEnter={(event) => moveHighlight(event.currentTarget)}
+                        onFocus={(event) => moveHighlight(event.currentTarget)}
                         onClick={() => handleNavClick("overview")}
                     >
                         <LayoutDashboard size={19} />
@@ -383,12 +403,8 @@ export default function OwnerDashboard() {
                         type="button"
                         className={`ob-item ${activeNav === "my-resources" ? "active" : ""}`}
                         data-nav-id="my-resources"
-                        onMouseEnter={(event) =>
-                            moveHighlight(event.currentTarget)
-                        }
-                        onFocus={(event) =>
-                            moveHighlight(event.currentTarget)
-                        }
+                        onMouseEnter={(event) => moveHighlight(event.currentTarget)}
+                        onFocus={(event) => moveHighlight(event.currentTarget)}
                         onClick={() => handleNavClick("my-resources")}
                     >
                         <Package size={19} />
@@ -399,12 +415,8 @@ export default function OwnerDashboard() {
                         type="button"
                         className={`ob-item ${activeNav === "requests" ? "active" : ""}`}
                         data-nav-id="requests"
-                        onMouseEnter={(event) =>
-                            moveHighlight(event.currentTarget)
-                        }
-                        onFocus={(event) =>
-                            moveHighlight(event.currentTarget)
-                        }
+                        onMouseEnter={(event) => moveHighlight(event.currentTarget)}
+                        onFocus={(event) => moveHighlight(event.currentTarget)}
                         onClick={() => handleNavClick("requests")}
                     >
                         <CalendarDays size={19} />
@@ -412,13 +424,11 @@ export default function OwnerDashboard() {
                     </button>
                 </nav>
 
-                {/* PROFILE AND LOGOUT */}
                 <div className="ob-sidebar-bottom">
                     <div className="ob-profile">
                         <div className="ob-avatar">
                             {user?.full_name?.charAt(0)?.toUpperCase() || "O"}
                         </div>
-
                         <div>
                             <strong>{user?.full_name || "Owner"}</strong>
                             <span>Resource Owner</span>
@@ -439,10 +449,7 @@ export default function OwnerDashboard() {
                 </div>
             </aside>
 
-            {/* MAIN DASHBOARD */}
             <main className="owner-main">
-
-                {/* HEADER */}
                 <header className="owner-header" id="overview">
                     <div>
                         <p className="owner-eyebrow">RESOURCE MANAGEMENT</p>
@@ -468,20 +475,17 @@ export default function OwnerDashboard() {
                     </p>
                 )}
 
-                {/* STATISTICS */}
                 <section className="owner-stats">
                     <div className="owner-stat-card">
                         <Package size={22} />
                         <span>Total Resources</span>
                         <h2>{loadingResources ? "..." : resources.length}</h2>
                     </div>
-
                     <div className="owner-stat-card">
                         <CalendarDays size={22} />
                         <span>Total Requests</span>
                         <h2>{loadingRequests ? "..." : requests.length}</h2>
                     </div>
-
                     <div className="owner-stat-card">
                         <Clock size={22} />
                         <span>Pending Requests</span>
@@ -489,11 +493,9 @@ export default function OwnerDashboard() {
                     </div>
                 </section>
 
-                {/* ADD RESOURCE FORM */}
                 {showForm && (
                     <section className="owner-form-section">
                         <h2>Add a New Resource</h2>
-
                         <form onSubmit={handleAddResource}>
                             <label>Resource name</label>
                             <input
@@ -578,15 +580,9 @@ export default function OwnerDashboard() {
                             />
 
                             <div className="owner-form-actions">
-                                <button
-                                    type="submit"
-                                    disabled={submittingResource}
-                                >
-                                    {submittingResource
-                                        ? "Publishing..."
-                                        : "Publish Resource"}
+                                <button type="submit" disabled={submittingResource}>
+                                    {submittingResource ? "Publishing..." : "Publish Resource"}
                                 </button>
-
                                 <button
                                     type="button"
                                     className="cancel-button"
@@ -599,40 +595,29 @@ export default function OwnerDashboard() {
                     </section>
                 )}
 
-                {/* MY RESOURCES */}
-                <section
-                    className="owner-resources"
-                    id="my-resources"
-                >
+                <section className="owner-resources" id="my-resources">
                     <div className="owner-section-heading">
                         <div>
                             <p className="owner-eyebrow">YOUR LISTINGS</p>
                             <h2>My Resources</h2>
                         </div>
-
                         <div className="owner-search">
                             <Search size={17} />
                             <input
                                 placeholder="Search resources..."
                                 value={search}
-                                onChange={(event) =>
-                                    setSearch(event.target.value)
-                                }
+                                onChange={(event) => setSearch(event.target.value)}
                             />
                         </div>
                     </div>
 
                     {resourceError && (
-                        <p className="owner-error-message">
-                            {resourceError}
-                        </p>
+                        <p className="owner-error-message">{resourceError}</p>
                     )}
 
                     <div className="owner-resource-grid">
                         {loadingResources && (
-                            <p className="owner-muted">
-                                Loading your resources...
-                            </p>
+                            <p className="owner-muted">Loading your resources...</p>
                         )}
 
                         {!loadingResources &&
@@ -640,25 +625,18 @@ export default function OwnerDashboard() {
                                 const Icon = getResourceIcon(resource);
 
                                 return (
-                                    <article
-                                        className="owner-resource-card"
-                                        key={resource.id}
-                                    >
+                                    <article className="owner-resource-card" key={resource.id}>
                                         <div className="owner-resource-icon">
                                             <Icon size={27} />
                                         </div>
-
                                         <span className="owner-resource-category">
                                             {resource.category}
                                         </span>
-
                                         <h3>{resource.title}</h3>
-
                                         <p className="owner-resource-location">
                                             <MapPin size={15} />
                                             {resource.location}
                                         </p>
-
                                         <span
                                             className={
                                                 resource.is_active
@@ -666,9 +644,7 @@ export default function OwnerDashboard() {
                                                     : "owner-status unavailable-status"
                                             }
                                         >
-                                            {resource.is_active
-                                                ? "Available"
-                                                : "Unavailable"}
+                                            {resource.is_active ? "Available" : "Unavailable"}
                                         </span>
                                     </article>
                                 );
@@ -687,7 +663,10 @@ export default function OwnerDashboard() {
 
                     <button
                         className="resource-action"
-                        onClick={fetchResources}
+                        onClick={() => {
+                            setLoadingResources(true);
+                            fetchResources();
+                        }}
                         disabled={loadingResources}
                     >
                         <RefreshCw size={15} />
@@ -695,11 +674,7 @@ export default function OwnerDashboard() {
                     </button>
                 </section>
 
-                {/* BOOKING REQUESTS */}
-                <section
-                    className="owner-requests"
-                    id="requests"
-                >
+                <section className="owner-requests" id="requests">
                     <div className="owner-section-heading">
                         <div>
                             <p className="owner-eyebrow">STUDENT ACTIVITY</p>
@@ -711,74 +686,49 @@ export default function OwnerDashboard() {
                     </div>
 
                     {requestError && (
-                        <p className="owner-error-message">
-                            {requestError}
-                        </p>
+                        <p className="owner-error-message">{requestError}</p>
                     )}
 
                     <div className="request-list">
                         {loadingRequests && (
-                            <p className="owner-muted">
-                                Loading booking requests...
-                            </p>
+                            <p className="owner-muted">Loading booking requests...</p>
                         )}
 
                         {!loadingRequests &&
                             requests.map((request) => {
-                                const resource = resourceMap.get(
-                                    Number(request.resource_id)
-                                );
-
-                                const status =
-                                    request.status?.toUpperCase() || "UNKNOWN";
-
+                                const resource = resourceMap.get(Number(request.resource_id));
+                                const status = request.status?.toUpperCase() || "UNKNOWN";
                                 const isPending = status === "PENDING";
-                                const isProcessing =
-                                    processingBooking === request.id;
+                                const isProcessing = processingBooking === request.id;
 
                                 return (
-                                    <article
-                                        className="request-card"
-                                        key={request.id}
-                                    >
+                                    <article className="request-card" key={request.id}>
                                         <div className="request-details">
                                             <h3>
                                                 {resource?.title ||
                                                     `Resource #${request.resource_id}`}
                                             </h3>
-
-                                            <p>
-                                                Requested by Student #{request.user_id}
-                                            </p>
-
+                                            <p>Requested by Student #{request.user_id}</p>
                                             <span>
                                                 <CalendarDays size={14} />
                                                 {formatDate(request.start_at)}
                                             </span>
-
                                             <span>
                                                 <Clock size={14} />
-                                                {formatTime(request.start_at)} –{" "}
-                                                {formatTime(request.end_at)}
+                                                {formatTime(request.start_at)} – {formatTime(request.end_at)}
                                             </span>
-
                                             <p>
-                                                <strong>Purpose:</strong>{" "}
-                                                {request.purpose}
+                                                <strong>Purpose:</strong> {request.purpose}
                                             </p>
-
                                             {request.reason && (
                                                 <p>
-                                                    <strong>Decision note:</strong>{" "}
-                                                    {request.reason}
+                                                    <strong>Decision note:</strong> {request.reason}
                                                 </p>
                                             )}
                                         </div>
 
                                         <div className="request-actions">
-                                            <span
-                                                className={`request-status ${status.toLowerCase()}`}
-                                            >
+                                            <span className={`request-status ${status.toLowerCase()}`}>
                                                 {getStatusLabel(status)}
                                             </span>
 
@@ -787,28 +737,15 @@ export default function OwnerDashboard() {
                                                     <button
                                                         className="approve-button"
                                                         disabled={isProcessing}
-                                                        onClick={() =>
-                                                            handleRequest(
-                                                                request.id,
-                                                                "APPROVED"
-                                                            )
-                                                        }
+                                                        onClick={() => handleRequest(request.id, "APPROVED")}
                                                     >
                                                         <CheckCircle size={15} />
-                                                        {isProcessing
-                                                            ? "Processing..."
-                                                            : "Approve"}
+                                                        {isProcessing ? "Processing..." : "Approve"}
                                                     </button>
-
                                                     <button
                                                         className="reject-button"
                                                         disabled={isProcessing}
-                                                        onClick={() =>
-                                                            handleRequest(
-                                                                request.id,
-                                                                "REJECTED"
-                                                            )
-                                                        }
+                                                        onClick={() => handleRequest(request.id, "REJECTED")}
                                                     >
                                                         <XCircle size={15} />
                                                         Reject
@@ -820,18 +757,17 @@ export default function OwnerDashboard() {
                                 );
                             })}
 
-                        {!loadingRequests &&
-                            !requestError &&
-                            requests.length === 0 && (
-                                <p className="owner-muted">
-                                    No booking requests yet.
-                                </p>
-                            )}
+                        {!loadingRequests && !requestError && requests.length === 0 && (
+                            <p className="owner-muted">No booking requests yet.</p>
+                        )}
                     </div>
 
                     <button
                         className="resource-action"
-                        onClick={fetchRequests}
+                        onClick={() => {
+                            setLoadingRequests(true);
+                            fetchRequests();
+                        }}
                         disabled={loadingRequests}
                     >
                         <RefreshCw size={15} />

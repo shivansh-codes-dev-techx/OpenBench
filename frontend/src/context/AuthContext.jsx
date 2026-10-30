@@ -1,20 +1,18 @@
-
-import { createContext, useContext, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { AuthContext } from "./AuthContextBase";
 import { authService } from "../services/authService";
-
-const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(null);
-    const [loading, setLoading] = useState(true);
+
+    const [loading, setLoading] = useState(
+        () => Boolean(localStorage.getItem("openbench_token"))
+    );
 
     useEffect(() => {
         const token = localStorage.getItem("openbench_token");
 
-        if (!token) {
-            setLoading(false);
-            return;
-        }
+        if (!token) return;
 
         authService
             .getCurrentUser()
@@ -25,7 +23,9 @@ export function AuthProvider({ children }) {
                 localStorage.removeItem("openbench_token");
                 setUser(null);
             })
-            .finally(() => setLoading(false));
+            .finally(() => {
+                setLoading(false);
+            });
     }, []);
 
     async function login(credentials) {
@@ -54,12 +54,10 @@ export function AuthProvider({ children }) {
     }
 
     return (
-        <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+        <AuthContext.Provider
+            value={{ user, loading, login, register, logout }}
+        >
             {children}
         </AuthContext.Provider>
     );
-}
-
-export function useAuth() {
-    return useContext(AuthContext);
 }
