@@ -4,7 +4,7 @@ The latest backend branch already contains `condition_reports` and `incidents` t
 
 ## Condition reports
 
-Use the existing `booking_id`, `submitted_by_id`, `report_type`, `condition_description`, `evidence_reference`, and `created_at` fields. Validate `report_type` against `CHECK_IN` and `CHECK_OUT`, require a non-empty trimmed description, require a booking in the appropriate lifecycle state, and ensure the submitting user is the booking student or resource owner. Resolve the resource through the booking rather than duplicating `resource_id`.
+Use the existing `booking_id`, `submitted_by_id`, `report_type`, `condition_description`, `evidence_reference`, and `created_at` fields. Validate `report_type` against the backend contract values `INITIAL` and `FINAL`, require a non-empty trimmed description, require a booking in the appropriate lifecycle state, and ensure the submitting user is the booking student or resource owner. Resolve the resource through the booking rather than duplicating `resource_id`.
 
 ## Incidents
 

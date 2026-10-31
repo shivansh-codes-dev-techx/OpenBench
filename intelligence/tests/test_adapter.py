@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from intelligence.adapter import availability_from_bookings, recommend_backend_resources
@@ -15,13 +15,63 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(availability_from_bookings([overlap], self.start, self.end))
         self.assertTrue(availability_from_bookings([pending], self.start, self.end))
 
+    def test_aware_datetimes_with_different_offsets_are_compared_by_instant(self):
+        ist = timezone(timedelta(hours=5, minutes=30))
+        booking = SimpleNamespace(
+            start_at=datetime(2026, 10, 30, 15, 45, tzinfo=ist),
+            end_at=datetime(2026, 10, 30, 16, 15, tzinfo=ist),
+            status="APPROVED",
+        )
+        self.assertFalse(availability_from_bookings([booking], self.start, self.end))
+
+    def test_invalid_requested_interval_is_rejected(self):
+        with self.assertRaises(ValueError):
+            availability_from_bookings([], self.end, self.start)
+
+    def test_naive_blocking_booking_fails_closed(self):
+        booking = SimpleNamespace(
+            start_at=datetime(2026, 10, 30, 10),
+            end_at=datetime(2026, 10, 30, 11),
+            status="IN_USE",
+        )
+        self.assertFalse(availability_from_bookings([booking], self.start, self.end))
+
+    def test_missing_blocking_booking_timestamps_fail_closed(self):
+        for booking in (
+            SimpleNamespace(status="APPROVED", end_at=self.end),
+            SimpleNamespace(status="IN_USE", start_at=self.start),
+        ):
+            with self.subTest(booking=booking):
+                self.assertFalse(availability_from_bookings([booking], self.start, self.end))
+
+    def test_invalid_blocking_booking_interval_fails_closed(self):
+        booking = SimpleNamespace(
+            start_at=self.end, end_at=self.start, status="APPROVED"
+        )
+        self.assertFalse(availability_from_bookings([booking], self.start, self.end))
+
+    def test_exact_overlap_boundaries_are_available(self):
+        ending_at_request_start = SimpleNamespace(
+            start_at=self.start - timedelta(hours=1),
+            end_at=self.start,
+            status="APPROVED",
+        )
+        starting_at_request_end = SimpleNamespace(
+            start_at=self.end,
+            end_at=self.end + timedelta(hours=1),
+            status="IN_USE",
+        )
+        self.assertTrue(availability_from_bookings(
+            [ending_at_request_start, starting_at_request_end], self.start, self.end
+        ))
+
     def test_backend_fields_and_verified_gate_are_adapted(self):
         resource = SimpleNamespace(id=1, title="Laser Cutter", category="fabrication", description="laser prototyping", location="Lab", is_active=True)
         requirements = [SimpleNamespace(requirement_type="training", requirement_value="Certified", is_mandatory=True)]
-        qualifications = [SimpleNamespace(qualification_type=" TRAINING ", qualification_title=" certified ", status="VERIFIED")]
+        qualifications = [SimpleNamespace(user_id=7, qualification_type=" TRAINING ", qualification_title=" certified ", status="VERIFIED")]
         results = recommend_backend_resources(
             {"category": "fabrication", "purpose": "laser", "location": "Lab"},
-            [resource], qualifications=qualifications,
+            [resource], requesting_student_id=7, qualifications=qualifications,
             requirements_by_resource={1: requirements}, bookings_by_resource={1: []},
             requested_start=self.start, requested_end=self.end,
         )
@@ -32,11 +82,32 @@ class AdapterTests(unittest.TestCase):
         requirements = [SimpleNamespace(requirement_type="training", requirement_value="Certified", is_mandatory=True)]
         results = recommend_backend_resources(
             {"category": "fabrication"}, [resource],
-            qualifications=[SimpleNamespace(qualification_type="training", qualification_title="Certified", status="PENDING")],
+            requesting_student_id=7,
+            qualifications=[SimpleNamespace(user_id=7, qualification_type="training", qualification_title="Certified", status="PENDING")],
             requirements_by_resource={1: requirements}, bookings_by_resource={1: []},
             requested_start=self.start, requested_end=self.end,
         )
         self.assertEqual(results, [])
+
+    def test_verified_qualification_from_another_student_does_not_grant_access(self):
+        resource = SimpleNamespace(id=1, title="Laser Cutter", category="fabrication", description="laser", location="Lab", is_active=True)
+        requirements = [SimpleNamespace(requirement_type="training", requirement_value="Certified", is_mandatory=True)]
+        results = recommend_backend_resources(
+            {"category": "fabrication"}, [resource], requesting_student_id=7,
+            qualifications=[SimpleNamespace(user_id=8, qualification_type="training", qualification_title="Certified", status="VERIFIED")],
+            requirements_by_resource={1: requirements}, bookings_by_resource={1: []},
+            requested_start=self.start, requested_end=self.end,
+        )
+        self.assertEqual(results, [])
+
+    def test_backend_title_is_used_for_purpose_matching(self):
+        resource = SimpleNamespace(id=1, title="Laser Cutter", category="fabrication", description=None, location="Lab", is_active=True)
+        results = recommend_backend_resources(
+            {"purpose": "laser cutter"}, [resource], requesting_student_id=7,
+            qualifications=[], requirements_by_resource={1: []}, bookings_by_resource={1: []},
+            requested_start=self.start, requested_end=self.end,
+        )
+        self.assertIn("Purpose relevance (100%)", results[0]["reasons"])
 
 
 if __name__ == "__main__":

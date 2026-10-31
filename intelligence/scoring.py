@@ -27,9 +27,12 @@ def _availability_score(requirements: Mapping[str, Any], resource: Mapping[str, 
 
 def component_scores(requirements: Mapping[str, Any], resource: Mapping[str, Any]) -> dict[str, float]:
     """Return normalized 0..1 scores for each weighted criterion."""
+    description = " ".join(
+        str(value) for value in (resource.get("title", ""), resource.get("description", "")) if value
+    )
     return {
         "category": text_similarity(requirements.get("category"), resource.get("category")),
-        "purpose": text_similarity(requirements.get("purpose"), resource.get("description", "")),
+        "purpose": text_similarity(requirements.get("purpose"), description),
         "availability": _availability_score(requirements, resource),
         "location": text_similarity(requirements.get("location"), resource.get("location")),
         # A successful hard-gate check earns full compatibility credit.
