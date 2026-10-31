@@ -173,6 +173,24 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertEqual(len(results), 1)
 
+    def test_missing_booking_mapping_entry_is_rejected(self):
+        resource = SimpleNamespace(id=1, title="Camera", category="media", description="", location="Lab", is_active=True)
+        with self.assertRaisesRegex(ValueError, "missing bookings entry for resource 1"):
+            recommend_backend_resources(
+                {}, [resource], requesting_student_id=7, qualifications=[],
+                requirements_by_resource={1: []}, bookings_by_resource={},
+                requested_start=self.start, requested_end=self.end,
+            )
+
+    def test_missing_requirement_mapping_entry_is_rejected(self):
+        resource = SimpleNamespace(id=1, title="Camera", category="media", description="", location="Lab", is_active=True)
+        with self.assertRaisesRegex(ValueError, "missing requirements entry for resource 1"):
+            recommend_backend_resources(
+                {}, [resource], requesting_student_id=7, qualifications=[],
+                requirements_by_resource={}, bookings_by_resource={1: []},
+                requested_start=self.start, requested_end=self.end,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

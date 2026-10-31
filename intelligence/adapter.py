@@ -142,16 +142,24 @@ def recommend_backend_resources(
             user_eligibility.setdefault(_normalized(item["type"]), set()).add(
                 _normalized(item["title"])
             )
+    active_resources = [
+        resource for resource in resources if _get(resource, "is_active", True)
+    ]
+    for resource in active_resources:
+        resource_id = _get(resource, "id")
+        if resource_id not in bookings_by_resource:
+            raise ValueError(f"missing bookings entry for resource {resource_id!r}")
+        if resource_id not in requirements_by_resource:
+            raise ValueError(f"missing requirements entry for resource {resource_id!r}")
     candidates = [
         backend_resource_to_candidate(
             resource,
-            bookings=bookings_by_resource.get(_get(resource, "id"), ()),
+            bookings=bookings_by_resource[_get(resource, "id")],
             requested_start=requested_start,
             requested_end=requested_end,
-            requirements=requirements_by_resource.get(_get(resource, "id"), ()),
+            requirements=requirements_by_resource[_get(resource, "id")],
         )
-        for resource in resources
-        if _get(resource, "is_active", True)
+        for resource in active_resources
     ]
     return recommend_resources(
         user_requirements,
