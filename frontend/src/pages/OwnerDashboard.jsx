@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "../context/useAuth";
-import { apiRequest } from "../api/client";
+import { apiRequest, formatApiError } from "../api/client";
 import "./OwnerDashboard.css";
 
 function getResourceIcon(resource) {
@@ -166,7 +166,7 @@ export default function OwnerDashboard() {
                     console.error("Owner resources error:", error);
                     if (!cancelled) {
                         setResourceError(
-                            error.message || "Unable to load resources."
+                            formatApiError(error, "Unable to load resources.")
                         );
                     }
                 })
@@ -191,7 +191,7 @@ export default function OwnerDashboard() {
                     console.error("Owner booking error:", error);
                     if (!cancelled) {
                         setRequestError(
-                            error.message || "Unable to load booking requests."
+                            formatApiError(error, "Unable to load booking requests.")
                         );
                     }
                 })
@@ -225,7 +225,7 @@ export default function OwnerDashboard() {
             setResourceError("");
         } catch (error) {
             console.error("Owner resources error:", error);
-            setResourceError(error.message || "Unable to load resources.");
+            setResourceError(formatApiError(error, "Unable to load resources."));
         } finally {
             setLoadingResources(false);
         }
@@ -244,7 +244,9 @@ export default function OwnerDashboard() {
             setRequestError("");
         } catch (error) {
             console.error("Owner booking error:", error);
-            setRequestError(error.message || "Unable to load booking requests.");
+            setRequestError(
+                formatApiError(error, "Unable to load booking requests.")
+            );
         } finally {
             setLoadingRequests(false);
         }
@@ -299,7 +301,7 @@ export default function OwnerDashboard() {
             await fetchResources();
         } catch (error) {
             console.error("Create resource error:", error);
-            setResourceError(error.message || "Unable to create resource.");
+            setResourceError(formatApiError(error, "Unable to create resource."));
         } finally {
             setSubmittingResource(false);
         }
@@ -334,7 +336,7 @@ export default function OwnerDashboard() {
             await fetchRequests();
         } catch (error) {
             console.error("Booking decision error:", error);
-            setRequestError(error.message || "Unable to update booking.");
+            setRequestError(formatApiError(error, "Unable to update booking."));
         } finally {
             setProcessingBooking(null);
         }

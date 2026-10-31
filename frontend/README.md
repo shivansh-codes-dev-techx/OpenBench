@@ -1,16 +1,26 @@
-# React + Vite
+# OpenBench Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The frontend is a React application built with Vite. Project-wide setup,
+environment configuration, API documentation, database notes, and production
+prerequisites are documented in the repository-root `README.md`.
 
-Currently, two official plugins are available:
+From this directory, install the locked dependencies and start the development
+server with:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```text
+npm ci
+npm run dev
+```
 
-## React Compiler
+The frontend reads `VITE_API_BASE_URL` at build time. Set it to the address of
+the running OpenBench backend when the default local address is not suitable.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Available verification commands are:
 
-## Expanding the Oxlint configuration
+```text
+npm run lint
+npm run build
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+The backend's local `create_all` initialization command is not a database
+migration strategy and is not a production deployment process.

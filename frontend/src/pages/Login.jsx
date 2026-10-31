@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/useAuth";
+import { formatApiError } from "../api/client";
 import "./Auth.css";
 
 export default function Login() {
@@ -42,7 +43,7 @@ export default function Login() {
         setError("Your account has an invalid role. Please contact the administrator.");
       }
     } catch (err) {
-      setError(err.message || "Login failed. Please try again.");
+      setError(formatApiError(err, "Login failed. Please try again."));
     } finally {
       setLoading(false);
     }
