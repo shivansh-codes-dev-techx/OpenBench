@@ -1,3 +1,4 @@
+
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text, func
@@ -48,3 +49,17 @@ class Resource(Base):
 
     owner: Mapped["User"] = relationship(back_populates="resources")
     bookings: Mapped[list["Booking"]] = relationship(back_populates="resource")
+
+    images: Mapped[list["ResourceImage"]] = relationship(
+        back_populates="resource",
+        cascade="all, delete-orphan",
+        order_by="ResourceImage.id",
+    )
+
+    @property
+    def primary_image_url(self) -> str | None:
+        primary_image = next(
+            (image for image in self.images if image.is_primary),
+            None,
+        )
+        return primary_image.url if primary_image else None

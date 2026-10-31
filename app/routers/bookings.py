@@ -5,6 +5,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Path,
     Response,
     UploadFile,
     status,
@@ -33,6 +34,10 @@ from app.services.inspection_image_service import (
     get_condition_report_image,
     list_condition_report_images,
     upload_condition_report_image,
+)
+from app.services.inspection_comparison_api_service import (
+    InspectionComparisonError,
+    get_booking_inspection_comparisons,
 )
 from cv_engine.quality import MAX_IMAGE_BYTES
 from app.services.booking_service import (
@@ -398,6 +403,56 @@ def get_booking_detail_endpoint(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
+
+
+@router.get(
+    "/{booking_id}/inspection-comparisons",
+    response_model=APIResponse,
+    summary="Get booking inspection comparisons",
+    description=(
+        "Returns available INITIAL-vs-FINAL CV results and explicit "
+        "unavailable statuses for comparisons that lack required sources. "
+        "CV output is supporting evidence; manual review is always required."
+    ),
+)
+def get_booking_inspection_comparisons_endpoint(
+    booking_id: int = Path(gt=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.STUDENT,
+            UserRole.OWNER,
+            UserRole.ADMIN,
+        )
+    ),
+):
+    try:
+        data = get_booking_inspection_comparisons(
+            db=db,
+            booking_id=booking_id,
+            actor=current_user,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+    except InspectionComparisonError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+
+    return APIResponse(
+        success=True,
+        message="Inspection comparison results retrieved successfully",
+        data=data,
+    )
 
 
 # --------------------------------------------------

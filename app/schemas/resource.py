@@ -1,3 +1,4 @@
+
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -47,6 +48,12 @@ class ResourceUpdate(BaseModel):
         return self
 
 
+class ResourceImageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    url: str
+
+
 class ResourceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -62,3 +69,6 @@ class ResourceResponse(BaseModel):
     available_until: datetime | None
     is_active: bool
     created_at: datetime
+
+    primary_image_url: str | None = None
+    images: list[ResourceImageResponse] = Field(default_factory=list)

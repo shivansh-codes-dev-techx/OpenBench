@@ -24,6 +24,14 @@ class AngleInspectionResult:
     message: str
     quality_warnings: list[str]
 
+    @property
+    def attention_required(self) -> bool:
+        return self.review_required
+
+    @property
+    def manual_review_required(self) -> bool:
+        return True
+
     def to_dict(self) -> dict:
         return {
             "angle": self.angle,
@@ -32,6 +40,8 @@ class AngleInspectionResult:
             "difference_percentage": self.difference_percentage,
             "potential_regions": self.potential_regions,
             "review_required": self.review_required,
+            "attention_required": self.attention_required,
+            "manual_review_required": self.manual_review_required,
             "message": self.message,
             "quality_warnings": self.quality_warnings,
         }
@@ -47,6 +57,22 @@ class InspectionResult:
     overall_similarity_score: float | None
     review_required: bool
 
+    @property
+    def attention_required(self) -> bool:
+        return self.review_required
+
+    @property
+    def manual_review_required(self) -> bool:
+        return True
+
+    @property
+    def overall_score_status(self) -> str:
+        if self.overall_similarity_score is None:
+            return "UNAVAILABLE"
+        if self.completed_angles < self.total_angles:
+            return "PARTIAL"
+        return "COMPLETE"
+
     def to_dict(self) -> dict:
         return {
             "status": self.status,
@@ -58,7 +84,10 @@ class InspectionResult:
                 for name, result in self.angles.items()
             },
             "overall_similarity_score": self.overall_similarity_score,
+            "overall_score_status": self.overall_score_status,
             "review_required": self.review_required,
+            "attention_required": self.attention_required,
+            "manual_review_required": self.manual_review_required,
         }
 
 

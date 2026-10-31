@@ -1,6 +1,6 @@
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.resource import Resource
 from app.schemas.resource import ResourceCreate, ResourceUpdate
@@ -48,6 +48,7 @@ def get_resources(
 ) -> list[Resource]:
     statement = (
         select(Resource)
+        .options(selectinload(Resource.images))
         .where(Resource.is_active.is_(True))
         .order_by(Resource.created_at.desc(), Resource.id.desc())
         .offset(skip)
@@ -61,9 +62,13 @@ def get_resource(
     db: Session,
     resource_id: int,
 ) -> Resource | None:
-    statement = select(Resource).where(
-        Resource.id == resource_id,
-        Resource.is_active.is_(True),
+    statement = (
+        select(Resource)
+        .options(selectinload(Resource.images))
+        .where(
+            Resource.id == resource_id,
+            Resource.is_active.is_(True),
+        )
     )
 
     return db.scalar(statement)

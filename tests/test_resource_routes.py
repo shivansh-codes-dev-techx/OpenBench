@@ -1,6 +1,8 @@
 
 import pytest
 
+from io import BytesIO
+from PIL import Image
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -106,7 +108,32 @@ def create_resource(client, headers, title="Projector"):
         headers=headers,
     )
 
+def create_test_image():
+    image = Image.new("RGB", (100, 100), color="blue")
+    image_bytes = BytesIO()
+    image.save(image_bytes, format="JPEG")
+    image_bytes.seek(0)
+    return image_bytes.getvalue()
 
+
+def upload_resource_image(client, resource_id, headers, is_primary=None):
+    data = {}
+
+    if is_primary is not None:
+        data["is_primary"] = str(is_primary).lower()
+
+    return client.post(
+        f"/resources/{resource_id}/images",
+        headers=headers,
+        files={
+            "file": (
+                "test-image.jpg",
+                create_test_image(),
+                "image/jpeg",
+            )
+        },
+        data=data,
+    )
 def test_owner_can_create_resource_and_owner_id_is_derived(test_context):
     client, _ = test_context
 
@@ -316,3 +343,196 @@ def test_resource_update_rejects_invalid_merged_availability(test_context):
     )
 
     assert response.status_code == 422
+def test_owner_can_upload_resource_image(test_context):
+    client, _ = test_context
+
+    owner_headers = register_user(
+        client, "Owner One", "owner1@example.com", "OWNER"
+    )
+
+    created = create_resource(client, owner_headers)
+    resource_id = created.json()["id"]
+
+    response = upload_resource_image(
+        client, resource_id, owner_headers
+    )
+
+    assert response.status_code == 201
+    assert response.json()["resource_id"] == resource_id
+    assert response.json()["is_primary"] is True
+    assert response.json()["url"]
+
+
+def test_first_uploaded_image_is_primary(test_context):
+    client, _ = test_context
+
+    owner_headers = register_user(
+        client, "Owner One", "owner1@example.com", "OWNER"
+    )
+
+    resource_id = create_resource(
+        client, owner_headers
+    ).json()["id"]
+
+    response = upload_resource_image(
+        client, resource_id, owner_headers
+    )
+
+    assert response.status_code == 201
+    assert response.json()["is_primary"] is True
+
+
+def test_owner_can_switch_primary_image(test_context):
+    client, _ = test_context
+
+    owner_headers = register_user(
+        client, "Owner One", "owner1@example.com", "OWNER"
+    )
+
+    resource_id = create_resource(
+        client, owner_headers
+    ).json()["id"]
+
+    first = upload_resource_image(
+        client, resource_id, owner_headers
+    )
+
+    second = upload_resource_image(
+        client, resource_id, owner_headers, is_primary=True
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.json()["is_primary"] is True
+
+    detail = client.get(f"/resources/{resource_id}")
+
+    assert detail.status_code == 200
+    assert detail.json()["primary_image_url"] == second.json()["url"]
+
+
+def test_resource_list_contains_image_urls(test_context):
+    client, _ = test_context
+
+    owner_headers = register_user(
+        client, "Owner One", "owner1@example.com", "OWNER"
+    )
+
+    resource_id = create_resource(
+        client, owner_headers
+    ).json()["id"]
+
+    uploaded = upload_resource_image(
+        client, resource_id, owner_headers
+    )
+
+    assert uploaded.status_code == 201
+
+    response = client.get("/resources")
+
+    assert response.status_code == 200
+
+    resource = next(
+        item for item in response.json()
+        if item["id"] == resource_id
+    )
+
+    assert resource["primary_image_url"] == uploaded.json()["url"]
+    assert len(resource["images"]) == 1
+    assert resource["images"][0]["url"] == uploaded.json()["url"]
+
+
+def test_public_image_endpoint_returns_image_bytes(test_context):
+    client, _ = test_context
+
+    owner_headers = register_user(
+        client, "Owner One", "owner1@example.com", "OWNER"
+    )
+
+    resource_id = create_resource(
+        client, owner_headers
+    ).json()["id"]
+
+    uploaded = upload_resource_image(
+        client, resource_id, owner_headers
+    )
+
+    image_id = uploaded.json()["id"]
+
+    response = client.get(
+        f"/resources/{resource_id}/images/{image_id}"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.content.startswith(b"\xff\xd8")
+
+
+def test_student_cannot_upload_resource_image(test_context):
+    client, _ = test_context
+
+    owner_headers = register_user(
+        client, "Owner One", "owner1@example.com", "OWNER"
+    )
+
+    student_headers = register_user(
+        client, "Student One", "student@example.com", "STUDENT"
+    )
+
+    resource_id = create_resource(
+        client, owner_headers
+    ).json()["id"]
+
+    response = upload_resource_image(
+        client, resource_id, student_headers
+    )
+
+    assert response.status_code == 403
+
+
+def test_owner_cannot_upload_image_to_another_owners_resource(test_context):
+    client, _ = test_context
+
+    owner_a_headers = register_user(
+        client, "Owner A", "ownera@example.com", "OWNER"
+    )
+
+    owner_b_headers = register_user(
+        client, "Owner B", "ownerb@example.com", "OWNER"
+    )
+
+    resource_id = create_resource(
+        client, owner_a_headers
+    ).json()["id"]
+
+    response = upload_resource_image(
+        client, resource_id, owner_b_headers
+    )
+
+    assert response.status_code == 403
+
+
+def test_invalid_image_upload_is_rejected(test_context):
+    client, _ = test_context
+
+    owner_headers = register_user(
+        client, "Owner One", "owner1@example.com", "OWNER"
+    )
+
+    resource_id = create_resource(
+        client, owner_headers
+    ).json()["id"]
+
+    response = client.post(
+        f"/resources/{resource_id}/images",
+        headers=owner_headers,
+        files={
+            "file": (
+                "fake.jpg",
+                b"This is not an image",
+                "image/jpeg",
+            )
+        },
+    )
+
+    assert response.status_code == 400
