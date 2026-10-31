@@ -1,6 +1,5 @@
 import hashlib
 import ntpath
-from collections import defaultdict
 from collections.abc import Iterable
 
 from sqlalchemy import select
@@ -46,10 +45,6 @@ class InspectionImageTooLargeError(ValueError):
 
 class DuplicateInspectionImageError(ValueError):
     pass
-
-
-class AmbiguousConditionReportError(RuntimeError):
-    """Raised when a booking has more than one report for a stage."""
 
 
 def _get_booking_report(
@@ -205,36 +200,32 @@ def get_condition_report_image(
 def load_booking_inspection_images(
     db: Session,
     booking_id: int,
+    initial_report_id: int,
+    final_report_id: int,
 ) -> tuple[dict[str, bytes], dict[str, bytes]]:
-    """Load CV input bytes; omit missing angles and reject ambiguous stages."""
+    """Load explicitly selected INITIAL and FINAL CV inputs, omitting absent angles."""
     if db.get(Booking, booking_id) is None:
         raise LookupError("Booking not found")
-    reports = list(
-        db.scalars(
-            select(ConditionReport)
-            .where(ConditionReport.booking_id == booking_id)
-            .order_by(ConditionReport.created_at.asc(), ConditionReport.id.asc())
-        ).all()
-    )
-    by_stage: dict[str, list[ConditionReport]] = defaultdict(list)
-    for report in reports:
-        if report.report_type in {"INITIAL", "FINAL"}:
-            by_stage[report.report_type].append(report)
-    for stage, stage_reports in by_stage.items():
-        if len(stage_reports) > 1:
-            raise AmbiguousConditionReportError(
-                f"Booking has multiple {stage} condition reports; select a canonical report before CV comparison"
-            )
 
-    result: dict[str, dict[str, bytes]] = {"INITIAL": {}, "FINAL": {}}
-    for stage, stage_reports in by_stage.items():
-        if not stage_reports:
-            continue
-        report = stage_reports[0]
+    selected_reports = (
+        (initial_report_id, "INITIAL"),
+        (final_report_id, "FINAL"),
+    )
+    result: list[dict[str, bytes]] = []
+    for report_id, expected_stage in selected_reports:
+        report = db.get(ConditionReport, report_id)
+        if report is None or report.booking_id != booking_id:
+            raise LookupError(
+                f"{expected_stage} condition report {report_id} was not found for booking {booking_id}"
+            )
+        if report.report_type != expected_stage:
+            raise ValueError(
+                f"Condition report {report_id} has type {report.report_type!r}; expected {expected_stage}"
+            )
         images: Iterable[ConditionReportImage] = db.scalars(
             select(ConditionReportImage).where(
                 ConditionReportImage.report_id == report.id
             )
         ).all()
-        result[stage] = {image.angle: bytes(image.image_data) for image in images}
-    return result["INITIAL"], result["FINAL"]
+        result.append({image.angle: bytes(image.image_data) for image in images})
+    return result[0], result[1]

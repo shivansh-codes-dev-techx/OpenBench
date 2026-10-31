@@ -20,7 +20,6 @@ from app.models.enums import BookingStatus, ResourceType, UserRole
 from app.models.resource import Resource
 from app.models.user import User
 from app.services.inspection_image_service import (
-    AmbiguousConditionReportError,
     load_booking_inspection_images,
 )
 
@@ -313,25 +312,84 @@ def test_missing_images_and_mismatched_report_ids(image_context):
 
 def test_cv_loader_returns_bytes_by_angle_and_omits_missing_angles(image_context):
     front = upload(image_context, angle="FRONT")
-    bottom = upload(image_context, stage="final", angle="BOTTOM")
-    assert front.status_code == bottom.status_code == 201
+    assert front.status_code == 201
     with image_context.session_factory() as db:
+        final_report = ConditionReport(
+            booking_id=image_context.bookings["initial"].id,
+            submitted_by_id=image_context.users["student"].id,
+            report_type="FINAL",
+            condition_description="Selected FINAL report for CV loader test",
+        )
+        db.add(final_report)
+        db.flush()
+        final_image_bytes = make_png_bytes()
+        db.add(ConditionReportImage(
+            report_id=final_report.id,
+            angle="BOTTOM",
+            original_filename="final.png",
+            mime_type="image/png",
+            byte_size=len(final_image_bytes),
+            sha256=hashlib.sha256(final_image_bytes).hexdigest(),
+            image_data=final_image_bytes,
+            uploaded_by_id=image_context.users["student"].id,
+        ))
+        db.commit()
         initial, final = load_booking_inspection_images(
-            db, image_context.bookings["initial"].id
+            db,
+            image_context.bookings["initial"].id,
+            image_context.reports["initial"].id,
+            final_report.id,
         )
     assert set(initial) == {"FRONT"}
     assert isinstance(initial["FRONT"], bytes)
-    assert final == {}
+    assert set(final) == {"BOTTOM"}
+    assert isinstance(final["BOTTOM"], bytes)
 
 
-def test_cv_loader_rejects_multiple_reports_for_one_stage(image_context):
+def test_cv_loader_rejects_nonexistent_report_ids(image_context):
     with image_context.session_factory() as db:
-        db.add(ConditionReport(
+        with pytest.raises(LookupError, match="INITIAL condition report 987654"):
+            load_booking_inspection_images(
+                db,
+                image_context.bookings["initial"].id,
+                987654,
+                image_context.reports["final"].id,
+            )
+
+
+def test_cv_loader_rejects_cross_booking_report_ids(image_context):
+    with image_context.session_factory() as db:
+        with pytest.raises(LookupError, match="FINAL condition report"):
+            load_booking_inspection_images(
+                db,
+                image_context.bookings["initial"].id,
+                image_context.reports["initial"].id,
+                image_context.reports["final"].id,
+            )
+
+
+def test_cv_loader_rejects_reports_with_incorrect_stage(image_context):
+    with image_context.session_factory() as db:
+        same_booking_final = ConditionReport(
             booking_id=image_context.bookings["initial"].id,
-            submitted_by_id=image_context.users["owner"].id,
-            report_type="INITIAL",
-            condition_description="Another actor's INITIAL report",
-        ))
+            submitted_by_id=image_context.users["student"].id,
+            report_type="FINAL",
+            condition_description="FINAL report for wrong-stage test",
+        )
+        db.add(same_booking_final)
         db.commit()
-        with pytest.raises(AmbiguousConditionReportError):
-            load_booking_inspection_images(db, image_context.bookings["initial"].id)
+        with pytest.raises(ValueError, match="expected INITIAL"):
+            load_booking_inspection_images(
+                db,
+                image_context.bookings["initial"].id,
+                same_booking_final.id,
+                image_context.reports["final"].id,
+            )
+
+        with pytest.raises(ValueError, match="expected FINAL"):
+            load_booking_inspection_images(
+                db,
+                image_context.bookings["initial"].id,
+                image_context.reports["initial"].id,
+                image_context.reports["initial"].id,
+            )
