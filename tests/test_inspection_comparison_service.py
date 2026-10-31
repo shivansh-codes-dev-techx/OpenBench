@@ -109,6 +109,8 @@ def test_runs_all_three_comparisons_and_preserves_engine_results(monkeypatch):
     assert baseline_initial["attention_required"] is True
     assert baseline_initial["manual_review_required"] is True
     assert baseline_initial["overall_score_status"] == "COMPLETE"
+    assert baseline_initial["overall_status"] == "COMPLETE"
+    assert result["overall_status"] == "COMPLETE"
     assert result["manual_review_required"] is True
 
 
@@ -116,6 +118,7 @@ def test_missing_images_produce_partial_results_without_scores():
     result = compare_inspection_stages({}, {}, {})
 
     assert result["status"] == "PARTIAL"
+    assert result["overall_status"] == "UNAVAILABLE"
     assert result["failed_comparisons"] == [
         "baseline_vs_initial",
         "initial_vs_final",
@@ -126,7 +129,9 @@ def test_missing_images_produce_partial_results_without_scores():
         assert comparison["failed_angles"] == list(REQUIRED_ANGLES)
         assert comparison["overall_similarity_score"] is None
         assert comparison["overall_score_status"] == "UNAVAILABLE"
+        assert comparison["overall_status"] == "UNAVAILABLE"
         assert comparison["angles"]["FRONT"]["status"] == "MISSING"
+        assert comparison["missing_angles"] == list(REQUIRED_ANGLES)
         assert comparison["review_required"] is True
         assert comparison["attention_required"] is True
 
@@ -143,6 +148,8 @@ def test_invalid_image_is_reported_as_failed_angle(monkeypatch):
     comparison = result["comparisons"]["baseline_vs_initial"]
 
     assert comparison["status"] == "PARTIAL"
+    assert comparison["overall_status"] == "PARTIAL"
+    assert result["overall_status"] == "PARTIAL"
     assert comparison["angles"]["FRONT"]["status"] == "FAILED"
     assert comparison["angles"]["FRONT"]["similarity_score"] is None
     assert "baseline:" in comparison["angles"]["FRONT"]["message"]
@@ -164,3 +171,34 @@ def test_alignment_failure_is_preserved_and_requires_review(monkeypatch):
     assert comparison["failed_angles"] == ["LEFT"]
     assert comparison["review_required"] is True
     assert comparison["overall_score_status"] == "PARTIAL"
+
+
+def test_unexpected_decoder_error_is_local_to_one_angle(monkeypatch):
+    from app.services import inspection_comparison_service as service
+
+    def decoder(image_data):
+        if image_data == b"unexpected-decoder-error":
+            raise RuntimeError("decoder defect")
+        return np.zeros((32, 32, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(service, "decode_image_bytes", decoder)
+    monkeypatch.setattr(
+        service,
+        "inspect_all_angles",
+        lambda reference, target: _engine_result(),
+    )
+    baseline = _image_set()
+    baseline["FRONT"] = b"unexpected-decoder-error"
+
+    result = service.compare_inspection_stages(
+        baseline,
+        _image_set(),
+        _image_set(),
+    )
+    comparison = result["comparisons"]["baseline_vs_initial"]
+
+    assert comparison["status"] == "PARTIAL"
+    assert comparison["angles"]["FRONT"]["status"] == "FAILED"
+    assert "RuntimeError: decoder defect" in comparison["angles"]["FRONT"]["message"]
+    assert comparison["angles"]["BACK"]["status"] == "COMPLETED"
+    assert "FRONT" in comparison["failed_angles"]

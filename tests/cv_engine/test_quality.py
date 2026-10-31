@@ -1,11 +1,13 @@
 ﻿from io import BytesIO
 
 import pytest
+import numpy as np
 from PIL import Image
 
 from cv_engine.quality import (
     ImageValidationError,
     assess_image_quality,
+    assess_image_array_quality,
 )
 
 
@@ -59,3 +61,23 @@ def test_result_can_be_converted_to_dictionary():
 
     assert data["valid"] is True
     assert "blur_variance" in data
+
+
+def test_decoded_array_quality_does_not_reencode_or_apply_file_size_limit():
+    image = np.random.default_rng(15).integers(
+        0, 256, size=(2400, 3200, 3), dtype=np.uint8
+    )
+
+    result = assess_image_array_quality(image)
+
+    assert result.valid is True
+    assert result.image_format == "DECODED_ARRAY"
+    assert (result.width, result.height) == (3200, 2400)
+    assert result.file_size_bytes == 0
+
+
+def test_decoded_array_quality_rejects_more_than_40_megapixels():
+    image = np.zeros((5000, 8001), dtype=np.uint8)
+
+    with pytest.raises(ImageValidationError, match="40 megapixel"):
+        assess_image_array_quality(image)

@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import cv2
 import numpy as np
@@ -19,6 +19,7 @@ class AlignmentResult:
     good_matches: int
     inliers: int
     reason: str | None = None
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -33,6 +34,8 @@ def align_images(
     *,
     min_matches: int = 10,
     min_inliers: int = 8,
+    min_inlier_ratio: float = 0.10,
+    min_overlap_fraction: float = 0.25,
     ratio_threshold: float = 0.75,
 ) -> AlignmentResult:
     """
@@ -47,6 +50,12 @@ def align_images(
         raise ValueError(
             "Match and inlier thresholds must be at least 4."
         )
+
+    if not 0 < min_inlier_ratio <= 1:
+        raise ValueError("min_inlier_ratio must be in (0, 1].")
+
+    if not 0 < min_overlap_fraction <= 1:
+        raise ValueError("min_overlap_fraction must be in (0, 1].")
 
     if not 0 < ratio_threshold < 1:
         raise ValueError(
@@ -133,6 +142,12 @@ def align_images(
             len(good_matches),
         )
 
+    if homography.shape != (3, 3) or not np.isfinite(homography).all():
+        return failure(
+            "Could not calculate a finite image alignment transform.",
+            len(good_matches),
+        )
+
     inliers = int(mask.ravel().sum())
 
     if inliers < min_inliers:
@@ -145,6 +160,19 @@ def align_images(
             good_matches=len(good_matches),
             inliers=inliers,
             reason="Insufficient geometric agreement between images.",
+        )
+
+    inlier_ratio = inliers / len(good_matches)
+    if inlier_ratio < min_inlier_ratio:
+        return AlignmentResult(
+            success=False,
+            aligned_image=None,
+            valid_mask=None,
+            keypoints_reference=ref_count,
+            keypoints_target=target_count,
+            good_matches=len(good_matches),
+            inliers=inliers,
+            reason="Too few matched features support the image alignment.",
         )
 
     height, width = reference_gray.shape
@@ -173,6 +201,25 @@ def align_images(
         borderValue=0,
     )
 
+    overlap_fraction = float(np.count_nonzero(valid_mask)) / valid_mask.size
+    if overlap_fraction < min_overlap_fraction:
+        return AlignmentResult(
+            success=False,
+            aligned_image=None,
+            valid_mask=None,
+            keypoints_reference=ref_count,
+            keypoints_target=target_count,
+            good_matches=len(good_matches),
+            inliers=inliers,
+            reason="Image alignment has too little overlapping area.",
+        )
+
+    warnings = []
+    if inlier_ratio < 0.25:
+        warnings.append("Alignment has a low inlier ratio; review the match.")
+    if overlap_fraction < 0.5:
+        warnings.append("Alignment uses less than half of the image overlap.")
+
     return AlignmentResult(
         success=True,
         aligned_image=aligned,
@@ -181,4 +228,5 @@ def align_images(
         keypoints_target=target_count,
         good_matches=len(good_matches),
         inliers=inliers,
+        warnings=warnings,
     )

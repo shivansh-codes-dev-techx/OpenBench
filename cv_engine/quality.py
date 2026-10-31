@@ -92,6 +92,68 @@ def assess_image_quality(
         raise ImageValidationError("Decoded image is empty.")
 
     gray_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2GRAY)
+    return _quality_result(
+        gray_image,
+        image_format=image_format,
+        width=width,
+        height=height,
+        file_size_bytes=file_size,
+        min_dimension=min_dimension,
+        blur_threshold=blur_threshold,
+    )
+
+
+def assess_image_array_quality(
+    image: np.ndarray,
+    *,
+    min_dimension: int = 320,
+    blur_threshold: float | None = None,
+) -> ImageQualityResult:
+    """Assess a decoded OpenCV image without re-encoding its pixels."""
+    if not isinstance(image, np.ndarray):
+        raise ImageValidationError("Image must be a NumPy array.")
+    if image.size == 0:
+        raise ImageValidationError("Decoded image is empty.")
+    if image.dtype != np.uint8:
+        raise ImageValidationError("Image must have uint8 data type.")
+
+    if image.ndim == 2:
+        gray_image = image
+    elif image.ndim == 3 and image.shape[2] == 3:
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    elif image.ndim == 3 and image.shape[2] == 4:
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+    else:
+        raise ImageValidationError("Unsupported decoded image shape.")
+
+    height, width = gray_image.shape
+    if width <= 0 or height <= 0:
+        raise ImageValidationError("Invalid image dimensions.")
+    if width * height > MAX_IMAGE_PIXELS:
+        raise ImageValidationError("Image exceeds the 40 megapixel limit.")
+
+    return _quality_result(
+        gray_image,
+        image_format="DECODED_ARRAY",
+        width=width,
+        height=height,
+        file_size_bytes=0,
+        min_dimension=min_dimension,
+        blur_threshold=blur_threshold,
+    )
+
+
+def _quality_result(
+    gray_image: np.ndarray,
+    *,
+    image_format: str,
+    width: int,
+    height: int,
+    file_size_bytes: int,
+    min_dimension: int,
+    blur_threshold: float | None,
+) -> ImageQualityResult:
+    """Calculate exposure, detail and resolution metrics from grayscale pixels."""
 
     # Higher variance generally indicates more image detail.
     blur_variance = float(
@@ -133,7 +195,7 @@ def assess_image_quality(
         image_format=image_format,
         width=width,
         height=height,
-        file_size_bytes=file_size,
+        file_size_bytes=file_size_bytes,
         blur_variance=round(blur_variance, 3),
         brightness_mean=round(brightness_mean, 3),
         underexposed_fraction=round(underexposed_fraction, 4),

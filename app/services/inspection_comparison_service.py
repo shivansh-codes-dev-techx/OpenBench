@@ -86,8 +86,8 @@ def _prepare_image_set(
     for angle, image_data in encoded_by_angle.items():
         try:
             decoded_by_angle[angle] = decode_image_bytes(image_data)
-        except ValueError as exc:
-            errors[angle] = str(exc)
+        except Exception as exc:
+            errors[angle] = f"{type(exc).__name__}: {exc}"
 
     return {
         "images": decoded_by_angle,
@@ -130,6 +130,7 @@ def _compare_pair(
                 "manual_review_required": True,
                 "message": "; ".join(failures),
                 "quality_warnings": [],
+                "alignment_warnings": [],
             }
 
     failed_angles = [
@@ -137,6 +138,12 @@ def _compare_pair(
         for angle in REQUIRED_ANGLES
         if angles[angle]["status"] != "COMPLETED"
     ]
+    missing_angles = [
+        angle for angle in REQUIRED_ANGLES
+        if angles[angle]["status"] == "MISSING"
+    ]
+    for angle in REQUIRED_ANGLES:
+        angles[angle].setdefault("alignment_warnings", [])
     completed_angles = len(REQUIRED_ANGLES) - len(failed_angles)
     input_errors = {
         stage: prepared["input_errors"]
@@ -155,7 +162,7 @@ def _compare_pair(
         "UNAVAILABLE"
         if result["overall_similarity_score"] is None
         else "PARTIAL"
-        if completed_angles < len(REQUIRED_ANGLES)
+        if completed_angles < len(REQUIRED_ANGLES) or input_errors
         else "COMPLETE"
     )
 
@@ -168,9 +175,11 @@ def _compare_pair(
         "total_angles": len(REQUIRED_ANGLES),
         "completed_angles": completed_angles,
         "failed_angles": failed_angles,
+        "missing_angles": missing_angles,
         "angles": angles,
         "overall_similarity_score": result["overall_similarity_score"],
         "overall_score_status": overall_score_status,
+        "overall_status": overall_score_status,
         "cv_review_required": result["review_required"],
         "review_required": True,
         "attention_required": attention_required,
@@ -209,14 +218,26 @@ def compare_inspection_stages(
         for name, result in comparisons.items()
         if result["status"] != "COMPLETED"
     ]
+    completed_comparisons = len(_COMPARISONS) - len(failed_comparisons)
+    overall_status = (
+        "UNAVAILABLE"
+        if all(
+            result["overall_status"] == "UNAVAILABLE"
+            for result in comparisons.values()
+        )
+        else "PARTIAL"
+        if completed_comparisons < len(_COMPARISONS)
+        else "COMPLETE"
+    )
 
     return {
         "status": (
             "COMPLETED" if not failed_comparisons else "PARTIAL"
         ),
-        "completed_comparisons": len(_COMPARISONS) - len(failed_comparisons),
+        "completed_comparisons": completed_comparisons,
         "failed_comparisons": failed_comparisons,
         "comparisons": comparisons,
+        "overall_status": overall_status,
         "review_required": True,
         "attention_required": any(
             result["attention_required"]
