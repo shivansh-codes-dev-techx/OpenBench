@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/useAuth";
+import { formatApiError } from "../api/client";
 import "./Auth.css";
 
 export default function Register() {
@@ -38,7 +39,7 @@ export default function Register() {
         navigate("/student/dashboard");
       }
     } catch (err) {
-      setError(err.message);
+      setError(formatApiError(err, "Registration failed. Please try again."));
     } finally {
       setLoading(false);
     }

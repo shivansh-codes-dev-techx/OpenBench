@@ -15,6 +15,7 @@ import {
     RefreshCw,
 } from "lucide-react";
 
+import { formatApiError } from "../api/client";
 import "./ResourceDetails.css";
 
 const API_BASE_URL = (
@@ -89,9 +90,7 @@ export default function ResourceDetails() {
 
             console.error("Resource details error:", err);
 
-            setError(
-                err.message || "Unable to connect to the server."
-            );
+            setError(formatApiError(err, "Unable to connect to the server."));
         }
     }, [id]);
 

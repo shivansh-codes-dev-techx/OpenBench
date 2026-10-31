@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, CalendarDays, CheckCircle } from "lucide-react";
 
-import { apiRequest } from "../api/client";
+import { apiRequest, formatApiError } from "../api/client";
 import "./Booking.css";
 
 function getLocalDateTime() {
@@ -42,11 +42,7 @@ export default function Booking() {
 
                 setResource(response.data ?? response);
             } catch (err) {
-                setError(
-                    typeof err.message === "string"
-                        ? err.message
-                        : "Unable to load resource."
-                );
+                setError(formatApiError(err, "Unable to load resource."));
             } finally {
                 setLoading(false);
             }
@@ -97,11 +93,9 @@ export default function Booking() {
             setBookingData(response.data ?? response);
             setConfirmed(true);
         } catch (err) {
-            const message = Array.isArray(err.message)
-                ? err.message.map((item) => item.msg || item.message).join(", ")
-                : err.message;
-
-            setError(message || "Booking request failed. Please try again.");
+            setError(
+                formatApiError(err, "Booking request failed. Please try again.")
+            );
         } finally {
             setSubmitting(false);
         }

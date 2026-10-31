@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "../context/useAuth";
-import { apiRequest } from "../api/client";
+import { apiRequest, formatApiError } from "../api/client";
 import "./StudentDashboard.css";
 
 const API_BASE_URL = (
@@ -66,16 +66,6 @@ function getStatusClass(status) {
         default:
             return "unknown";
     }
-}
-
-function getApiError(error) {
-    if (Array.isArray(error?.message)) {
-        return error.message
-            .map((item) => item.msg || item.message || "Validation error")
-            .join(", ");
-    }
-
-    return error?.message || "Something went wrong. Please try again.";
 }
 
 function getSavedReportFlags() {
@@ -138,7 +128,7 @@ export default function StudentDashboard() {
                 })
                 .catch((err) => {
                     console.error("Resource fetching error:", err);
-                    if (!cancelled) setError(getApiError(err));
+                    if (!cancelled) setError(formatApiError(err));
                 })
                 .finally(() => {
                     if (!cancelled) setLoading(false);
@@ -157,7 +147,7 @@ export default function StudentDashboard() {
                 })
                 .catch((err) => {
                     console.error("Booking fetching error:", err);
-                    if (!cancelled) setBookingError(getApiError(err));
+                    if (!cancelled) setBookingError(formatApiError(err));
                 })
                 .finally(() => {
                     if (!cancelled) setBookingsLoading(false);
@@ -193,7 +183,7 @@ export default function StudentDashboard() {
             setError("");
         } catch (err) {
             console.error("Resource fetching error:", err);
-            setError(getApiError(err));
+            setError(formatApiError(err));
         } finally {
             setLoading(false);
         }
@@ -211,7 +201,7 @@ export default function StudentDashboard() {
             setBookingError("");
         } catch (err) {
             console.error("Booking fetching error:", err);
-            setBookingError(getApiError(err));
+            setBookingError(formatApiError(err));
         } finally {
             setBookingsLoading(false);
         }
@@ -339,7 +329,7 @@ export default function StudentDashboard() {
             await fetchBookings();
         } catch (err) {
             console.error(`${actionName} error:`, err);
-            setMessage(bookingId, getApiError(err), "error");
+            setMessage(bookingId, formatApiError(err), "error");
         } finally {
             setActionLoading((previous) => ({
                 ...previous,
