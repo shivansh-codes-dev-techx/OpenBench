@@ -98,11 +98,11 @@ def backend_resource_to_candidate(
     requirements: Iterable[Any] = (),
 ) -> dict[str, Any]:
     """Map a backend Resource and related records to recommender fields."""
-    required = {
-        _normalized(_get(item, "requirement_type")): _normalized(_get(item, "requirement_value"))
+    required = [
+        (_normalized(_get(item, "requirement_type")), _normalized(_get(item, "requirement_value")))
         for item in requirements
         if _get(item, "is_mandatory", True)
-    }
+    ]
     return {
         "resource_id": _get(resource, "id"),
         "title": _get(resource, "title") or "",
@@ -136,11 +136,12 @@ def recommend_backend_resources(
         for qualification in qualifications
         if _get(qualification, "user_id") == requesting_student_id
     ]
-    user_eligibility = {
-        _normalized(item["type"]): _normalized(item["title"])
-        for item in verified
-        if item["status"] == "VERIFIED"
-    }
+    user_eligibility: dict[str, set[str]] = {}
+    for item in verified:
+        if item["status"] == "VERIFIED":
+            user_eligibility.setdefault(_normalized(item["type"]), set()).add(
+                _normalized(item["title"])
+            )
     candidates = [
         backend_resource_to_candidate(
             resource,

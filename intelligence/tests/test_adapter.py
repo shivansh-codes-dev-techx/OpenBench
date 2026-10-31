@@ -109,6 +109,70 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertIn("Purpose relevance (100%)", results[0]["reasons"])
 
+    def test_same_type_verified_qualifications_work_in_either_order(self):
+        resource = SimpleNamespace(id=1, title="Workshop", category="lab", description="", location="Lab", is_active=True)
+        requirement = SimpleNamespace(requirement_type="training", requirement_value="CNC certified", is_mandatory=True)
+        requested = SimpleNamespace(user_id=7, qualification_type="training", qualification_title="CNC certified", status="VERIFIED")
+        other = SimpleNamespace(user_id=7, qualification_type="training", qualification_title="First aid", status="VERIFIED")
+        for qualifications in ([requested, other], [other, requested]):
+            with self.subTest(order=qualifications):
+                results = recommend_backend_resources(
+                    {}, [resource], requesting_student_id=7, qualifications=qualifications,
+                    requirements_by_resource={1: [requirement]}, bookings_by_resource={1: []},
+                    requested_start=self.start, requested_end=self.end,
+                )
+                self.assertEqual([item["resource_id"] for item in results], [1])
+
+    def test_multiple_mandatory_requirements_of_same_type_are_preserved(self):
+        resource = SimpleNamespace(id=1, title="Workshop", category="lab", description="", location="Lab", is_active=True)
+        requirements = [
+            SimpleNamespace(requirement_type="training", requirement_value="CNC certified", is_mandatory=True),
+            SimpleNamespace(requirement_type="training", requirement_value="First aid", is_mandatory=True),
+        ]
+        qualifications = [
+            SimpleNamespace(user_id=7, qualification_type="training", qualification_title="CNC certified", status="VERIFIED"),
+            SimpleNamespace(user_id=7, qualification_type="training", qualification_title="First aid", status="VERIFIED"),
+        ]
+        results = recommend_backend_resources(
+            {}, [resource], requesting_student_id=7, qualifications=qualifications,
+            requirements_by_resource={1: requirements}, bookings_by_resource={1: []},
+            requested_start=self.start, requested_end=self.end,
+        )
+        self.assertEqual([item["resource_id"] for item in results], [1])
+
+    def test_one_of_two_same_type_mandatory_requirements_is_not_enough(self):
+        resource = SimpleNamespace(id=1, title="Workshop", category="lab", description="", location="Lab", is_active=True)
+        requirements = [
+            SimpleNamespace(requirement_type="training", requirement_value="CNC certified", is_mandatory=True),
+            SimpleNamespace(requirement_type="training", requirement_value="First aid", is_mandatory=True),
+        ]
+        qualifications = [
+            SimpleNamespace(user_id=7, qualification_type="training", qualification_title="CNC certified", status="VERIFIED"),
+        ]
+        results = recommend_backend_resources(
+            {}, [resource], requesting_student_id=7, qualifications=qualifications,
+            requirements_by_resource={1: requirements}, bookings_by_resource={1: []},
+            requested_start=self.start, requested_end=self.end,
+        )
+        self.assertEqual(results, [])
+
+    def test_all_same_type_mandatory_requirements_must_be_satisfied(self):
+        resource = SimpleNamespace(id=1, title="Workshop", category="lab", description="", location="Lab", is_active=True)
+        requirements = [
+            SimpleNamespace(requirement_type="training", requirement_value="CNC certified", is_mandatory=True),
+            SimpleNamespace(requirement_type="training", requirement_value="First aid", is_mandatory=True),
+        ]
+        qualifications = [
+            SimpleNamespace(user_id=7, qualification_type="training", qualification_title="CNC certified", status="VERIFIED"),
+            SimpleNamespace(user_id=7, qualification_type="training", qualification_title="First aid", status="VERIFIED"),
+        ]
+        results = recommend_backend_resources(
+            {}, [resource], requesting_student_id=7, qualifications=qualifications,
+            requirements_by_resource={1: requirements}, bookings_by_resource={1: []},
+            requested_start=self.start, requested_end=self.end,
+        )
+        self.assertEqual(len(results), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

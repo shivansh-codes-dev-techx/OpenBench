@@ -30,12 +30,26 @@ def is_eligible(user_eligibility: Any, required_eligibility: Any) -> bool:
     requirements must match case-insensitively; a collection means any listed
     value is accepted. Empty requirements permit everyone. Missing or malformed
     user attributes fail closed when a resource declares that attribute.
+    A sequence of attribute/value pairs preserves repeated attributes; every
+    pair must match (AND semantics).
     """
     if not required_eligibility:
         return True
-    if not isinstance(required_eligibility, Mapping) or not isinstance(user_eligibility, Mapping):
+    if not isinstance(user_eligibility, Mapping):
         return False
-    for key, required in required_eligibility.items():
+
+    if isinstance(required_eligibility, Mapping):
+        checks = list(required_eligibility.items())
+    elif isinstance(required_eligibility, (list, tuple)):
+        checks = []
+        for item in required_eligibility:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                return False
+            checks.append((item[0], item[1]))
+    else:
+        return False
+
+    for key, required in checks:
         if key not in user_eligibility:
             return False
         actual = user_eligibility[key]
