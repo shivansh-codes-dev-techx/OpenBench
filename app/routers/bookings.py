@@ -1,5 +1,14 @@
 ﻿
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import require_roles
@@ -14,6 +23,18 @@ from app.schemas.booking import (
     ConditionReportResponse,
 )
 from app.schemas.common import APIResponse
+from app.schemas.condition_report_image import ConditionReportImageMetadata
+from app.services.inspection_image_service import (
+    DuplicateInspectionImageError,
+    InspectionImageTooLargeError,
+    InvalidInspectionAngleError,
+    InvalidInspectionImageError,
+    UnsupportedInspectionImageTypeError,
+    get_condition_report_image,
+    list_condition_report_images,
+    upload_condition_report_image,
+)
+from cv_engine.quality import MAX_IMAGE_BYTES
 from app.services.booking_service import (
     create_booking,
     get_my_bookings,
@@ -26,6 +47,147 @@ from app.services.booking_service import (
 )
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
+
+
+def _inspection_image_metadata(booking, report, image) -> dict:
+    return {
+        "image_id": image.id,
+        "booking_id": booking.id,
+        "report_id": report.id,
+        "angle": image.angle,
+        "stage": report.report_type,
+        "mime_type": image.mime_type,
+        "byte_size": image.byte_size,
+        "sha256": image.sha256,
+        "uploaded_at": image.uploaded_at,
+    }
+
+
+def _raise_inspection_image_error(exc: Exception) -> None:
+    if isinstance(exc, LookupError):
+        code = status.HTTP_404_NOT_FOUND
+    elif isinstance(exc, PermissionError):
+        code = status.HTTP_403_FORBIDDEN
+    elif isinstance(exc, DuplicateInspectionImageError):
+        code = status.HTTP_409_CONFLICT
+    elif isinstance(exc, RuntimeError):
+        code = status.HTTP_409_CONFLICT
+    elif isinstance(exc, InspectionImageTooLargeError):
+        code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    elif isinstance(exc, UnsupportedInspectionImageTypeError):
+        code = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+    elif isinstance(exc, (InvalidInspectionAngleError, InvalidInspectionImageError, ValueError)):
+        code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    else:
+        raise exc
+    raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{booking_id}/condition-reports/{report_id}/images",
+    response_model=ConditionReportImageMetadata,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_condition_report_image_endpoint(
+    booking_id: int,
+    report_id: int,
+    file: UploadFile = File(...),
+    angle: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.STUDENT, UserRole.OWNER, UserRole.ADMIN)
+    ),
+):
+    image_data = await file.read(MAX_IMAGE_BYTES + 1)
+    if len(image_data) > MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Image exceeds the 15 MiB size limit",
+        )
+    try:
+        booking, report, image = upload_condition_report_image(
+            db,
+            booking_id=booking_id,
+            report_id=report_id,
+            actor=current_user,
+            angle=angle,
+            filename=file.filename,
+            declared_mime_type=file.content_type,
+            image_data=image_data,
+        )
+        return _inspection_image_metadata(booking, report, image)
+    except (
+        LookupError,
+        PermissionError,
+        RuntimeError,
+        ValueError,
+        DuplicateInspectionImageError,
+        InspectionImageTooLargeError,
+        UnsupportedInspectionImageTypeError,
+    ) as exc:
+        _raise_inspection_image_error(exc)
+    finally:
+        await file.close()
+
+
+@router.get(
+    "/{booking_id}/condition-reports/{report_id}/images",
+)
+def list_condition_report_images_endpoint(
+    booking_id: int,
+    report_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.STUDENT, UserRole.OWNER, UserRole.ADMIN)
+    ),
+):
+    try:
+        booking, report, images = list_condition_report_images(
+            db,
+            booking_id=booking_id,
+            report_id=report_id,
+            actor=current_user,
+        )
+        return {
+            "images": [
+                _inspection_image_metadata(booking, report, image)
+                for image in images
+            ]
+        }
+    except (LookupError, PermissionError, ValueError) as exc:
+        _raise_inspection_image_error(exc)
+
+
+@router.get(
+    "/{booking_id}/condition-reports/{report_id}/images/{image_id}",
+)
+def get_condition_report_image_endpoint(
+    booking_id: int,
+    report_id: int,
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.STUDENT, UserRole.OWNER, UserRole.ADMIN)
+    ),
+):
+    try:
+        _, image = get_condition_report_image(
+            db,
+            booking_id=booking_id,
+            report_id=report_id,
+            image_id=image_id,
+            actor=current_user,
+        )
+    except (LookupError, PermissionError, ValueError) as exc:
+        _raise_inspection_image_error(exc)
+    return Response(
+        content=image.image_data,
+        media_type=image.mime_type,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 # --------------------------------------------------
