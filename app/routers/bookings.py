@@ -98,13 +98,13 @@ async def upload_condition_report_image_endpoint(
         require_roles(UserRole.STUDENT, UserRole.OWNER, UserRole.ADMIN)
     ),
 ):
-    image_data = await file.read(MAX_IMAGE_BYTES + 1)
-    if len(image_data) > MAX_IMAGE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Image exceeds the 15 MiB size limit",
-        )
     try:
+        image_data = await file.read(MAX_IMAGE_BYTES + 1)
+        if len(image_data) > MAX_IMAGE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Image exceeds the 15 MiB size limit",
+            )
         booking, report, image = upload_condition_report_image(
             db,
             booking_id=booking_id,

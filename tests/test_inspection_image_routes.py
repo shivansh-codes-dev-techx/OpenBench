@@ -35,6 +35,13 @@ def make_png_bytes() -> bytes:
     return make_image_bytes("PNG")
 
 
+def make_oversized_pixel_count_png_bytes() -> bytes:
+    image = Image.new("P", (8001, 5000))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
 class ImageTestContext:
     def __init__(self, client, session_factory, users, reports, bookings, actor_state):
         self.client = client
@@ -237,6 +244,16 @@ def test_oversized_file_is_rejected_before_decode(image_context):
 
     response = upload(image_context, image_data=b"x" * (MAX_IMAGE_BYTES + 1))
     assert response.status_code == 413
+
+
+def test_image_over_40_megapixels_is_rejected(image_context):
+    image_data = make_oversized_pixel_count_png_bytes()
+    assert len(image_data) < 15 * 1024 * 1024
+
+    response = upload(image_context, image_data=image_data)
+
+    assert response.status_code == 422
+    assert "40 megapixel" in response.json()["detail"]
 
 
 def test_unrelated_user_cannot_upload_list_or_retrieve(image_context):
