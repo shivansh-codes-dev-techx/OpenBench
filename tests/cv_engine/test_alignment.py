@@ -99,6 +99,19 @@ def test_invalid_ratio_is_rejected(textured_image):
         )
 
 
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [("min_inlier_ratio", 0), ("min_overlap_fraction", 1.1)],
+)
+def test_invalid_reliability_thresholds_are_rejected(
+    textured_image,
+    argument,
+    value,
+):
+    with pytest.raises(ValueError):
+        align_images(textured_image, textured_image, **{argument: value})
+
+
 def test_result_dictionary_excludes_image_data(textured_image):
     result = align_images(textured_image, textured_image)
 
@@ -124,6 +137,56 @@ def test_valid_mask_contains_valid_pixels():
     result = align_images(image, image.copy())
 
     assert np.count_nonzero(result.valid_mask) > 0
+
+
+def test_partial_overlap_emits_alignment_warning(textured_image, monkeypatch):
+    def translated_homography(target_points, reference_points, method, threshold):
+        homography = np.array(
+            [[1.0, 0.0, 400.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+        return homography, np.ones((len(target_points), 1), dtype=np.uint8)
+
+    monkeypatch.setattr(cv2, "findHomography", translated_homography)
+    result = align_images(textured_image, textured_image)
+
+    assert result.success is True
+    assert result.valid_mask is not None
+    assert any("less than half" in warning for warning in result.warnings)
+
+
+def test_too_little_overlap_fails_alignment_without_aligned_image(
+    textured_image,
+    monkeypatch,
+):
+    def translated_homography(target_points, reference_points, method, threshold):
+        homography = np.array(
+            [[1.0, 0.0, 500.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+        return homography, np.ones((len(target_points), 1), dtype=np.uint8)
+
+    monkeypatch.setattr(cv2, "findHomography", translated_homography)
+    result = align_images(textured_image, textured_image)
+
+    assert result.success is False
+    assert result.aligned_image is None
+    assert result.valid_mask is None
+    assert result.reason == "Image alignment has too little overlapping area."
+
+
+def test_low_inlier_ratio_fails_alignment(textured_image, monkeypatch):
+    def weak_homography(target_points, reference_points, method, threshold):
+        mask = np.zeros((len(target_points), 1), dtype=np.uint8)
+        mask[:8] = 1
+        return np.eye(3, dtype=np.float64), mask
+
+    monkeypatch.setattr(cv2, "findHomography", weak_homography)
+    result = align_images(textured_image, textured_image)
+
+    assert result.success is False
+    assert result.aligned_image is None
+    assert result.reason == "Too few matched features support the image alignment."
 
 
 def test_alignment_dict_excludes_image_and_mask():

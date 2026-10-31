@@ -3,14 +3,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import cv2
 import numpy as np
 
 from cv_engine.alignment import align_images
 from cv_engine.angles import REQUIRED_ANGLES, validate_angles
 from cv_engine.comparison import compare_images
 from cv_engine.preprocessing import preprocess_image
-from cv_engine.quality import assess_image_quality
+from cv_engine.quality import (
+    ImageValidationError,
+    assess_image_array_quality,
+)
+
+BLUR_VARIANCE_WARNING_THRESHOLD = 20.0
 
 
 @dataclass
@@ -23,6 +27,7 @@ class AngleInspectionResult:
     review_required: bool
     message: str
     quality_warnings: list[str]
+    alignment_warnings: list[str]
 
     @property
     def attention_required(self) -> bool:
@@ -44,6 +49,7 @@ class AngleInspectionResult:
             "manual_review_required": self.manual_review_required,
             "message": self.message,
             "quality_warnings": self.quality_warnings,
+            "alignment_warnings": self.alignment_warnings,
         }
 
 
@@ -73,18 +79,32 @@ class InspectionResult:
             return "PARTIAL"
         return "COMPLETE"
 
+    @property
+    def overall_status(self) -> str:
+        """Tri-state status that reflects whether an overall score is usable."""
+        return self.overall_score_status
+
+    @property
+    def missing_angles(self) -> list[str]:
+        return [
+            angle for angle, result in self.angles.items()
+            if result.status == "MISSING"
+        ]
+
     def to_dict(self) -> dict:
         return {
             "status": self.status,
             "total_angles": self.total_angles,
             "completed_angles": self.completed_angles,
             "failed_angles": self.failed_angles,
+            "missing_angles": self.missing_angles,
             "angles": {
                 name: result.to_dict()
                 for name, result in self.angles.items()
             },
             "overall_similarity_score": self.overall_similarity_score,
             "overall_score_status": self.overall_score_status,
+            "overall_status": self.overall_status,
             "review_required": self.review_required,
             "attention_required": self.attention_required,
             "manual_review_required": self.manual_review_required,
@@ -92,40 +112,13 @@ class InspectionResult:
 
 
 def _assess_array_quality(image: np.ndarray):
-    """
-    Convert an OpenCV image array to PNG bytes
-    and assess its image quality.
-    """
-
-    if not isinstance(image, np.ndarray):
-        raise ValueError("Image must be a NumPy array.")
-
-    if image.size == 0:
-        raise ValueError("Inspection image is empty.")
-
-    if image.dtype != np.uint8:
-        raise ValueError("Inspection image must have uint8 data type.")
-
-    if image.ndim == 2:
-        pass
-
-    elif image.ndim == 3 and image.shape[2] in (3, 4):
-        pass
-
-    else:
-        raise ValueError("Unsupported inspection image shape.")
-
     try:
-        success, encoded = cv2.imencode(".png", image)
-    except cv2.error as exc:
-        raise ValueError(
-            f"Could not encode inspection image: {exc}"
-        ) from exc
-
-    if not success:
-        raise ValueError("Could not encode inspection image.")
-
-    return assess_image_quality(encoded.tobytes())
+        return assess_image_array_quality(
+            image,
+            blur_threshold=BLUR_VARIANCE_WARNING_THRESHOLD,
+        )
+    except ImageValidationError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def inspect_angle(
@@ -191,7 +184,12 @@ def inspect_angle(
                 or "Image alignment failed."
             ),
             quality_warnings=quality_warnings,
+            alignment_warnings=[
+                alignment.reason or "Image alignment failed."
+            ],
         )
+
+    alignment_warnings = list(getattr(alignment, "warnings", []))
 
     # Step 4: Compare aligned images.
     comparison = compare_images(
@@ -204,6 +202,7 @@ def inspect_angle(
     review_required = (
         comparison.difference_percentage > 0
         or bool(quality_warnings)
+        or bool(alignment_warnings)
     )
 
     message = "Comparison completed."
@@ -213,6 +212,8 @@ def inspect_angle(
 
     if quality_warnings:
         message += " Image quality warnings detected."
+    if alignment_warnings:
+        message += " Alignment warnings detected."
 
     return AngleInspectionResult(
         angle=angle,
@@ -223,6 +224,7 @@ def inspect_angle(
         review_required=review_required,
         message=message,
         quality_warnings=quality_warnings,
+        alignment_warnings=alignment_warnings,
     )
 
 
@@ -297,6 +299,7 @@ def inspect_all_angles(
                 review_required=True,
                 message="Initial or final image is missing.",
                 quality_warnings=[],
+                alignment_warnings=[],
             )
 
             failed_angles.append(angle)
@@ -310,7 +313,7 @@ def inspect_all_angles(
                 final_image,
             )
 
-        except (ValueError, TypeError, cv2.error) as exc:
+        except Exception as exc:
 
             result = AngleInspectionResult(
                 angle=angle,
@@ -319,8 +322,9 @@ def inspect_all_angles(
                 difference_percentage=None,
                 potential_regions=[],
                 review_required=True,
-                message=str(exc),
+                message=f"{type(exc).__name__}: {exc}",
                 quality_warnings=[],
+                alignment_warnings=[],
             )
 
         results[angle] = result

@@ -125,6 +125,7 @@ def test_overall_score_is_none_when_nothing_completes():
     assert result.completed_angles == 0
     assert result.overall_similarity_score is None
     assert result.overall_score_status == "UNAVAILABLE"
+    assert result.overall_status == "UNAVAILABLE"
     assert result.status == "PARTIAL"
     assert result.manual_review_required is True
     assert result.attention_required is True
@@ -140,6 +141,8 @@ def test_result_dictionary_is_serializable(inspection_images):
     assert "FRONT" in data["angles"]
     assert "overall_similarity_score" in data
     assert data["overall_score_status"] == "COMPLETE"
+    assert data["overall_status"] == "COMPLETE"
+    assert data["missing_angles"] == []
     assert data["manual_review_required"] is True
     assert "attention_required" in data
 
@@ -329,28 +332,79 @@ def test_alignment_failure_requires_manual_review_and_attention():
     assert result.manual_review_required is True
 
 
-def test_unexpected_processing_error_is_not_silently_swallowed(
+def test_blurry_image_is_reported_as_quality_warning():
+    image = np.full((400, 400, 3), 128, dtype=np.uint8)
+
+    result = inspect_angle("FRONT", image, image.copy())
+
+    assert any("blur" in warning.lower() for warning in result.quality_warnings)
+    assert result.review_required is True
+
+
+def test_unexpected_processing_error_is_isolated_to_one_angle(
     inspection_images,
     monkeypatch,
 ):
     initial, final = inspection_images
-    processed_angles = []
+    real_inspect_angle = inspect_angle
 
     def fail_unexpectedly(angle, initial_image, final_image):
-        processed_angles.append(angle)
         if angle == "FRONT":
             raise RuntimeError("unexpected processing defect")
-        raise ValueError("expected image validation failure")
+        return real_inspect_angle(angle, initial_image, final_image)
 
     monkeypatch.setattr(
         "cv_engine.inspection.inspect_angle",
         fail_unexpectedly,
     )
 
-    with pytest.raises(RuntimeError, match="unexpected processing defect"):
-        inspect_all_angles(initial, final)
+    result = inspect_all_angles(initial, final)
 
-    assert processed_angles == ["FRONT"]
+    assert result.status == "PARTIAL"
+    assert result.completed_angles == 5
+    assert result.angles["FRONT"].status == "FAILED"
+    assert result.angles["FRONT"].similarity_score is None
+    assert "RuntimeError: unexpected processing defect" in result.angles["FRONT"].message
+    assert result.angles["BACK"].status == "COMPLETED"
+    assert result.attention_required is True
+    assert result.manual_review_required is True
+
+
+def test_different_source_dimensions_are_compared_without_resizing_failure():
+    rng = np.random.default_rng(19)
+    initial = rng.integers(20, 235, (400, 500, 3), dtype=np.uint8)
+    final = cv2.resize(initial, (600, 300), interpolation=cv2.INTER_AREA)
+
+    result = inspect_angle("FRONT", initial, final)
+
+    assert result.status in {"COMPLETED", "FAILED"}
+    if result.status == "FAILED":
+        assert result.similarity_score is None
+        assert result.review_required is True
+
+
+def test_alignment_warnings_are_exposed_and_require_review(
+    inspection_images,
+    monkeypatch,
+):
+    initial, final = inspection_images
+
+    def fake_align(reference_image, target_image, **kwargs):
+        return SimpleNamespace(
+            success=True,
+            aligned_image=target_image,
+            valid_mask=np.full(target_image.shape, 255, dtype=np.uint8),
+            warnings=["Alignment overlap is limited."],
+            reason=None,
+        )
+
+    monkeypatch.setattr("cv_engine.inspection.align_images", fake_align)
+    result = inspect_angle("FRONT", initial["FRONT"], final["FRONT"])
+
+    assert result.review_required is True
+    assert result.alignment_warnings == ["Alignment overlap is limited."]
+    assert "Alignment warnings" in result.message
+    assert result.to_dict()["alignment_warnings"] == result.alignment_warnings
 
 
 def test_inspection_passes_valid_mask_to_comparison(

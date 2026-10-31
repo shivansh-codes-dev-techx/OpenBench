@@ -278,6 +278,14 @@ def test_missing_baseline_never_uses_resource_gallery_images(comparison_context)
     assert data["stages"]["baseline"]["present_angles"] == []
     assert data["comparisons"]["baseline_vs_initial"]["status"] == "UNAVAILABLE"
     assert data["comparisons"]["baseline_vs_final"]["status"] == "UNAVAILABLE"
+    for comparison_name in ("baseline_vs_initial", "baseline_vs_final"):
+        comparison = data["comparisons"][comparison_name]
+        assert comparison["overall_status"] == "UNAVAILABLE"
+        assert comparison["manual_review_required"] is True
+        assert all(
+            comparison["angles"][angle]["alignment_warnings"] == []
+            for angle in REQUIRED_ANGLES
+        )
     assert data["status"] == "NOT_READY"
     assert data["stages"]["baseline"]["present_angles"] == []
 
@@ -294,6 +302,7 @@ def test_incomplete_angles_are_reported_without_claiming_completion(comparison_c
     comparison = data["comparisons"]["initial_vs_final"]
     assert response.status_code == 200
     assert comparison["status"] == "PARTIAL"
+    assert comparison["overall_status"] == "PARTIAL"
     assert comparison["completed_angles"] < 6
     assert comparison["missing_angles"]["initial"] == [
         angle for angle in REQUIRED_ANGLES if angle != "FRONT"
@@ -316,6 +325,7 @@ def test_successful_initial_final_comparison_returns_no_image_bytes(comparison_c
     data = response.json()["data"]
     initial_final = data["comparisons"]["initial_vs_final"]
     assert initial_final["status"] == "COMPLETED"
+    assert initial_final["overall_status"] == "COMPLETE"
     assert initial_final["completed_angles"] == 6
     assert initial_final["failed_angles"] == []
     assert initial_final["angles"]["FRONT"]["similarity_score"] is not None

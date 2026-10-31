@@ -108,11 +108,13 @@ def _unavailable_comparison(
                 "manual_review_required": True,
                 "message": reason,
                 "quality_warnings": [],
+                "alignment_warnings": [],
             }
             for angle in REQUIRED_ANGLES
         },
         "overall_similarity_score": None,
         "overall_score_status": "UNAVAILABLE",
+        "overall_status": "UNAVAILABLE",
         "review_required": True,
         "attention_required": True,
         "manual_review_required": True,
