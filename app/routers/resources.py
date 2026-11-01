@@ -32,6 +32,7 @@ from app.schemas.resource import (
 )
 from app.services.resource_service import (
     create_resource,
+    get_owner_resources,
     get_resource,
     get_resources,
     update_resource,
@@ -49,7 +50,11 @@ from app.services.resource_baseline_service import (
     list_resource_baseline_images,
     replace_resource_baseline_image,
 )
+from app.services.booking_baseline_snapshot_service import (
+    validate_resource_baseline,
+)
 from cv_engine.quality import MAX_IMAGE_BYTES
+from cv_engine.angles import REQUIRED_ANGLES
 
 router = APIRouter(prefix="/resources", tags=["Resources"])
 
@@ -149,6 +154,16 @@ def create_resource_endpoint(
         owner_id=current_user.id,
         resource_data=resource_data,
     )
+
+
+@router.get("/owner", response_model=list[ResourceResponse])
+def list_owner_resources(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.OWNER, UserRole.ADMIN)
+    ),
+):
+    return get_owner_resources(db, current_user)
 
 
 @router.post(
@@ -378,7 +393,22 @@ def get_resource_baseline_images(
 ):
     try:
         images = list_resource_baseline_images(db, resource_id=resource_id, actor=current_user)
-        return {"images": [_baseline_metadata(image) for image in images]}
+        validation = validate_resource_baseline(db, resource_id=resource_id)
+        invalid_angles = validation["invalid_angles"]
+        response_images = []
+        for image in images:
+            metadata = _baseline_metadata(image)
+            metadata["validation_status"] = (
+                "invalid" if image.angle in invalid_angles else "valid"
+            )
+            metadata["validation_error"] = invalid_angles.get(image.angle)
+            response_images.append(metadata)
+        return {
+            "required_angles": list(REQUIRED_ANGLES),
+            "missing_angles": validation["missing_angles"],
+            "invalid_angles": invalid_angles,
+            "images": response_images,
+        }
     except (LookupError, PermissionError, ValueError) as exc:
         raise _baseline_http_error(exc) from exc
 

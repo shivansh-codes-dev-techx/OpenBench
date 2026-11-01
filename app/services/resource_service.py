@@ -2,7 +2,9 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.enums import UserRole
 from app.models.resource import Resource
+from app.models.user import User
 from app.schemas.resource import ResourceCreate, ResourceUpdate
 
 
@@ -55,6 +57,20 @@ def get_resources(
         .limit(limit)
     )
 
+    return list(db.scalars(statement).all())
+
+
+def get_owner_resources(
+    db: Session,
+    actor: User,
+) -> list[Resource]:
+    statement = (
+        select(Resource)
+        .options(selectinload(Resource.images))
+        .order_by(Resource.created_at.desc(), Resource.id.desc())
+    )
+    if actor.role != UserRole.ADMIN:
+        statement = statement.where(Resource.owner_id == actor.id)
     return list(db.scalars(statement).all())
 
 

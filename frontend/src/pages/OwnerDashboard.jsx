@@ -1,9 +1,8 @@
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 
 import {
-    LayoutDashboard,
     Package,
     CalendarDays,
     Plus,
@@ -12,7 +11,6 @@ import {
     CheckCircle,
     XCircle,
     Clock,
-    LogOut,
     Laptop,
     Armchair,
     Monitor,
@@ -22,6 +20,7 @@ import {
 
 import { useAuth } from "../context/useAuth";
 import { apiRequest, formatApiError } from "../api/client";
+import OwnerPortalNav from "./OwnerPortalNav";
 import "./OwnerDashboard.css";
 
 function getResourceIcon(resource) {
@@ -65,17 +64,8 @@ function getStatusLabel(status) {
 }
 
 export default function OwnerDashboard() {
-    const { user, logout } = useAuth();
-    const navigate = useNavigate();
-
-    const [isNavOpen, setIsNavOpen] = useState(false);
-    const [activeNav, setActiveNav] = useState("overview");
-    const [highlightStyle, setHighlightStyle] = useState({
-        top: 0,
-        height: 56,
-    });
-
-    const navRef = useRef(null);
+    const { user } = useAuth();
+    const location = useLocation();
 
     const [resources, setResources] = useState([]);
     const [requests, setRequests] = useState([]);
@@ -87,6 +77,7 @@ export default function OwnerDashboard() {
 
     const [resourceError, setResourceError] = useState("");
     const [requestError, setRequestError] = useState("");
+    const [baselineErrorResourceId, setBaselineErrorResourceId] = useState(null);
 
     const [submittingResource, setSubmittingResource] = useState(false);
     const [processingBooking, setProcessingBooking] = useState(null);
@@ -101,43 +92,13 @@ export default function OwnerDashboard() {
         usage_rules: "",
     });
 
-    function moveHighlight(element) {
-        if (!element || !navRef.current) return;
-
-        setHighlightStyle({
-            top: element.offsetTop,
-            height: element.offsetHeight,
-        });
-    }
-
-    function handleNavClick(id) {
-        setActiveNav(id);
-        setIsNavOpen(false);
-
-        document.getElementById(id)?.scrollIntoView({
+    useEffect(() => {
+        if (location.hash !== "#requests") return;
+        document.getElementById("requests")?.scrollIntoView({
             behavior: "smooth",
             block: "start",
         });
-    }
-
-    useEffect(() => {
-        function handleEscape(event) {
-            if (event.key === "Escape") setIsNavOpen(false);
-        }
-
-        window.addEventListener("keydown", handleEscape);
-        return () => window.removeEventListener("keydown", handleEscape);
-    }, []);
-
-    useEffect(() => {
-        if (!isNavOpen) return;
-
-        const activeElement = navRef.current?.querySelector(
-            `[data-nav-id="${activeNav}"]`
-        );
-
-        if (activeElement) moveHighlight(activeElement);
-    }, [isNavOpen, activeNav]);
+    }, [location.hash]);
 
     // Initial data loading: state updates occur after the API responses.
     useEffect(() => {
@@ -318,6 +279,7 @@ export default function OwnerDashboard() {
         try {
             setProcessingBooking(bookingId);
             setRequestError("");
+            setBaselineErrorResourceId(null);
             setSuccessMessage("");
 
             await apiRequest(`/bookings/${bookingId}/decision`, {
@@ -336,15 +298,38 @@ export default function OwnerDashboard() {
             await fetchRequests();
         } catch (error) {
             console.error("Booking decision error:", error);
-            setRequestError(formatApiError(error, "Unable to update booking."));
+            const details = error.details;
+            const missingAngles = details?.missing_angles;
+            const invalidAngles = details?.invalid_angles;
+            if (
+                decision === "APPROVED" &&
+                (missingAngles?.length || Object.keys(invalidAngles || {}).length)
+            ) {
+                const reasons = [];
+                if (missingAngles?.length) {
+                    reasons.push(`Missing: ${missingAngles.join(", ")}.`);
+                }
+                if (Object.keys(invalidAngles || {}).length) {
+                    reasons.push(
+                        `Invalid: ${Object.entries(invalidAngles)
+                            .map(([angle, message]) => `${angle} (${message})`)
+                            .join(", ")}.`
+                    );
+                }
+                setRequestError(
+                    `${details.message || "Resource baselines need attention."} ${reasons.join(" ")}`
+                );
+                setBaselineErrorResourceId(
+                    requests.find((item) => item.id === bookingId)?.resource_id
+                );
+            } else {
+                setRequestError(
+                    formatApiError(error, "Unable to update booking.")
+                );
+            }
         } finally {
             setProcessingBooking(null);
         }
-    }
-
-    function handleLogout() {
-        logout();
-        navigate("/login", { replace: true });
     }
 
     const resourceMap = new Map(
@@ -353,103 +338,7 @@ export default function OwnerDashboard() {
 
     return (
         <div className="owner-dashboard">
-            <button
-                type="button"
-                className={`ob-menu-btn ${isNavOpen ? "is-open" : ""}`}
-                onClick={() => setIsNavOpen((previous) => !previous)}
-                aria-label={isNavOpen ? "Close navigation" : "Open navigation"}
-                aria-expanded={isNavOpen}
-                aria-controls="owner-navigation"
-            >
-                <span />
-                <span />
-                <span />
-            </button>
-
-            <div
-                className={`ob-nav-scrim ${isNavOpen ? "visible" : ""}`}
-                onClick={() => setIsNavOpen(false)}
-                aria-hidden="true"
-            />
-
-            <aside
-                className={`ob-sidebar ${isNavOpen ? "visible" : ""}`}
-                id="owner-navigation"
-                aria-label="Owner navigation"
-            >
-                <div className="ob-brand">OpenBench.</div>
-                <p className="ob-menu-label">OWNER PORTAL</p>
-
-                <nav className="ob-links" ref={navRef}>
-                    <div
-                        className="ob-follow"
-                        style={{
-                            transform: `translateY(${highlightStyle.top}px)`,
-                            height: `${highlightStyle.height}px`,
-                        }}
-                    />
-
-                    <button
-                        type="button"
-                        className={`ob-item ${activeNav === "overview" ? "active" : ""}`}
-                        data-nav-id="overview"
-                        onMouseEnter={(event) => moveHighlight(event.currentTarget)}
-                        onFocus={(event) => moveHighlight(event.currentTarget)}
-                        onClick={() => handleNavClick("overview")}
-                    >
-                        <LayoutDashboard size={19} />
-                        Dashboard
-                    </button>
-
-                    <button
-                        type="button"
-                        className={`ob-item ${activeNav === "my-resources" ? "active" : ""}`}
-                        data-nav-id="my-resources"
-                        onMouseEnter={(event) => moveHighlight(event.currentTarget)}
-                        onFocus={(event) => moveHighlight(event.currentTarget)}
-                        onClick={() => handleNavClick("my-resources")}
-                    >
-                        <Package size={19} />
-                        My Resources
-                    </button>
-
-                    <button
-                        type="button"
-                        className={`ob-item ${activeNav === "requests" ? "active" : ""}`}
-                        data-nav-id="requests"
-                        onMouseEnter={(event) => moveHighlight(event.currentTarget)}
-                        onFocus={(event) => moveHighlight(event.currentTarget)}
-                        onClick={() => handleNavClick("requests")}
-                    >
-                        <CalendarDays size={19} />
-                        Booking Requests
-                    </button>
-                </nav>
-
-                <div className="ob-sidebar-bottom">
-                    <div className="ob-profile">
-                        <div className="ob-avatar">
-                            {user?.full_name?.charAt(0)?.toUpperCase() || "O"}
-                        </div>
-                        <div>
-                            <strong>{user?.full_name || "Owner"}</strong>
-                            <span>Resource Owner</span>
-                        </div>
-                    </div>
-
-                    <button
-                        type="button"
-                        className="ob-logout"
-                        onClick={() => {
-                            setIsNavOpen(false);
-                            handleLogout();
-                        }}
-                    >
-                        <LogOut size={18} />
-                        Logout
-                    </button>
-                </div>
-            </aside>
+            <OwnerPortalNav />
 
             <main className="owner-main">
                 <header className="owner-header" id="overview">
@@ -688,7 +577,19 @@ export default function OwnerDashboard() {
                     </div>
 
                     {requestError && (
-                        <p className="owner-error-message">{requestError}</p>
+                        <p className="owner-error-message">
+                            {requestError}
+                            {baselineErrorResourceId && (
+                                <>
+                                    {" "}
+                                    <Link
+                                        to={`/owner/resources?resource=${baselineErrorResourceId}`}
+                                    >
+                                        Manage this resource’s baselines
+                                    </Link>
+                                </>
+                            )}
+                        </p>
                     )}
 
                     <div className="request-list">

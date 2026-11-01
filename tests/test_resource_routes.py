@@ -10,6 +10,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.main import app
 from app.database import Base, get_db
+from app.models.resource_baseline_image import ResourceBaselineImage
+from app.models.resource import Resource
 from app.models.user import User
 from app.models.enums import UserRole
 from app.core.security import hash_password, create_access_token
@@ -150,6 +152,177 @@ def test_owner_can_create_resource_and_owner_id_is_derived(test_context):
     assert response.status_code == 201
     assert response.json()["owner_id"] > 0
     assert response.json()["title"] == "Projector"
+
+
+def test_owner_resource_list_includes_only_own_active_and_inactive_resources(
+    test_context,
+):
+    client, testing_session = test_context
+    owner_a = register_user(
+        client, "Owner A", "owner-a@example.com", "OWNER"
+    )
+    owner_b = register_user(
+        client, "Owner B", "owner-b@example.com", "OWNER"
+    )
+    own_resource = create_resource(client, owner_a, "Owner A resource").json()
+    inactive_resource = create_resource(
+        client, owner_a, "Inactive owner resource"
+    ).json()
+    other_resource = create_resource(
+        client, owner_b, "Owner B resource"
+    ).json()
+
+    with testing_session() as db:
+        db.get(Resource, inactive_resource["id"]).is_active = False
+        db.commit()
+
+    response = client.get("/resources/owner", headers=owner_a)
+
+    assert response.status_code == 200
+    assert {item["id"] for item in response.json()} == {
+        own_resource["id"],
+        inactive_resource["id"],
+    }
+    assert next(
+        item for item in response.json()
+        if item["id"] == inactive_resource["id"]
+    )["is_active"] is False
+    assert other_resource["id"] not in {
+        item["id"] for item in response.json()
+    }
+
+
+def test_owner_resource_list_requires_owner_or_admin(test_context):
+    client, _ = test_context
+    student = register_user(
+        client, "Student", "owner-list-student@example.com", "STUDENT"
+    )
+
+    assert client.get("/resources/owner").status_code == 401
+    assert client.get("/resources/owner", headers=student).status_code == 403
+
+
+def test_baseline_list_reports_validation_and_missing_angles(test_context):
+    client, _ = test_context
+    owner = register_user(
+        client, "Baseline Owner", "baseline-owner@example.com", "OWNER"
+    )
+    resource = create_resource(client, owner).json()
+    upload = client.post(
+        f"/resources/{resource['id']}/baseline-images",
+        headers=owner,
+        data={"angle": "FRONT"},
+        files={
+            "file": (
+                "front.jpg",
+                create_test_image(),
+                "image/jpeg",
+            )
+        },
+    )
+    assert upload.status_code == 201
+
+    response = client.get(
+        f"/resources/{resource['id']}/baseline-images",
+        headers=owner,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["required_angles"] == [
+        "FRONT",
+        "BACK",
+        "LEFT",
+        "RIGHT",
+        "TOP",
+        "BOTTOM",
+    ]
+    assert body["missing_angles"] == [
+        "BACK",
+        "LEFT",
+        "RIGHT",
+        "TOP",
+        "BOTTOM",
+    ]
+    assert body["invalid_angles"] == {}
+    assert body["images"][0]["angle"] == "FRONT"
+    assert body["images"][0]["validation_status"] == "valid"
+    assert body["images"][0]["validation_error"] is None
+
+
+def test_baseline_status_detects_corruption_and_owner_can_replace_image(
+    test_context,
+):
+    client, testing_session = test_context
+    owner_a = register_user(
+        client, "Baseline A", "baseline-a@example.com", "OWNER"
+    )
+    owner_b = register_user(
+        client, "Baseline B", "baseline-b@example.com", "OWNER"
+    )
+    resource = create_resource(client, owner_a).json()
+    upload = client.post(
+        f"/resources/{resource['id']}/baseline-images",
+        headers=owner_a,
+        data={"angle": "FRONT"},
+        files={
+            "file": (
+                "front.jpg",
+                create_test_image(),
+                "image/jpeg",
+            )
+        },
+    )
+    assert upload.status_code == 201
+
+    with testing_session() as db:
+        image = db.query(ResourceBaselineImage).filter_by(
+            resource_id=resource["id"],
+            angle="FRONT",
+        ).one()
+        image.sha256 = "0" * 64
+        db.commit()
+
+    status_response = client.get(
+        f"/resources/{resource['id']}/baseline-images",
+        headers=owner_a,
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["invalid_angles"]["FRONT"] == (
+        "SHA256 does not match stored image bytes"
+    )
+    assert status_response.json()["images"][0]["validation_status"] == "invalid"
+
+    denied = client.put(
+        f"/resources/{resource['id']}/baseline-images/FRONT",
+        headers=owner_b,
+        files={
+            "file": (
+                "replacement.jpg",
+                create_test_image(),
+                "image/jpeg",
+            )
+        },
+    )
+    assert denied.status_code == 403
+
+    replaced = client.put(
+        f"/resources/{resource['id']}/baseline-images/FRONT",
+        headers=owner_a,
+        files={
+            "file": (
+                "replacement.jpg",
+                create_test_image(),
+                "image/jpeg",
+            )
+        },
+    )
+    assert replaced.status_code == 200
+    refreshed = client.get(
+        f"/resources/{resource['id']}/baseline-images",
+        headers=owner_a,
+    )
+    assert refreshed.json()["images"][0]["validation_status"] == "valid"
 
 
 def test_student_cannot_create_resource(test_context):

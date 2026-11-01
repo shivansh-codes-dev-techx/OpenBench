@@ -8,6 +8,7 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import StudentDashboard from "./pages/StudentDashboard";
 import OwnerDashboard from "./pages/OwnerDashboard";
+import OwnerResources from "./pages/OwnerResources";
 import ResourceDetails from "./pages/ResourceDetails";
 import Booking from "./pages/Booking";
 
@@ -67,6 +68,15 @@ function App() {
                         element={
                             <ProtectedRoute allowedRoles={["OWNER"]}>
                                 <OwnerDashboard />
+                            </ProtectedRoute>
+                        }
+                    />
+
+                    <Route
+                        path="/owner/resources"
+                        element={
+                            <ProtectedRoute allowedRoles={["OWNER"]}>
+                                <OwnerResources />
                             </ProtectedRoute>
                         }
                     />

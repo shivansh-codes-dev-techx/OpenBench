@@ -32,11 +32,12 @@ export function formatApiError(error, fallback = DEFAULT_API_ERROR) {
 
 export async function apiRequest(endpoint, options = {}) {
     const token = localStorage.getItem("openbench_token");
+    const isFormData = options.body instanceof FormData;
 
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         ...options,
         headers: {
-            "Content-Type": "application/json",
+            ...(!isFormData ? { "Content-Type": "application/json" } : {}),
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
             ...options.headers,
         },
