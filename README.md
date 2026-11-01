@@ -1,168 +1,94 @@
 # OpenBench
 
-OpenBench is a campus resource-sharing application. The repository contains a
-FastAPI backend, a SQLAlchemy data model, and a React/Vite frontend. Students
-can discover resources and request bookings. Resource owners can publish
-resources and approve or reject booking requests.
+OpenBench is a campus resource-sharing application with a FastAPI backend and
+a React/Vite frontend. Students can discover resources and request bookings;
+owners can publish resources and approve or reject booking requests. The
+backend also supports eligibility checks and image-based condition inspections.
 
-## Repository Layout
+## Repository layout
 
 - `app/`: FastAPI application, SQLAlchemy models, schemas, services, and routes.
-- `tests/`: backend tests.
+- `alembic/`: versioned database migrations.
+- `cv_engine/`: image inspection and comparison.
 - `frontend/`: React/Vite application.
-- `.env.example`: backend environment variable template.
-- `requirements.txt`: pinned Python dependencies.
+- `tests/`: backend tests.
+- `docs/DEPLOYMENT.md`: Render/PostgreSQL and frontend deployment notes.
 
-## Backend Development
+## Backend development
 
-Run backend commands from the repository root.
-
-### Prerequisites
-
-- Python installed and available as `python`.
-- A shell capable of creating and activating a Python virtual environment.
-
-### Create the Environment
-
-Windows PowerShell:
+Run commands from the repository root. Create and activate a virtual
+environment, then install pinned dependencies:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-Unix-like shells:
-
-```sh
-python -m venv .venv
-source .venv/bin/activate
-```
-
-Install the pinned dependencies:
-
-```text
 python -m pip install -r requirements.txt
 ```
 
-### Configure Environment Variables
+Copy `.env.example` to `.env` and replace the `SECRET_KEY` placeholder with a
+random secret of at least 32 characters. Do not commit `.env`. The settings are:
 
-Copy `.env.example` to `.env` and replace the placeholder `SECRET_KEY` with a
-unique secret for the environment. Do not commit `.env`.
-
-The current backend settings are:
-
-- `SECRET_KEY`: required signing secret for access tokens.
-- `ALGORITHM`: JWT signing algorithm; defaults to `HS256`.
+- `SECRET_KEY`: JWT signing secret (required).
+- `ALGORITHM`: JWT algorithm; defaults to `HS256`.
 - `ACCESS_TOKEN_EXPIRE_MINUTES`: token lifetime; defaults to `60`.
-- `CORS_ORIGINS`: comma-separated allowed frontend origins. The example values
-  are for local development.
+- `DATABASE_URL`: SQLAlchemy URL; defaults to local SQLite.
+- `CORS_ORIGINS`: comma-separated allowed origins; example values are local
+  development origins.
 
-### Initialize the Local Database
+Initialize a new local database with the versioned migration:
 
-The development database is the repository-root SQLite file
-`openbench.db`. On a fresh local checkout, initialize its initial schema with:
-
-```text
-python -m app.init_db
+```powershell
+python -m alembic upgrade head
 ```
 
-This command uses SQLAlchemy `create_all` to create missing tables. It does not
-drop existing tables and is intended only for local development. It is not a
-database migration system, is not run automatically by the API, and must not
-be treated as a production schema-management process. A migration system must
-be selected and implemented before production deployment.
+Start the API:
 
-### Start the Backend
-
-Start the local development server with:
-
-```text
+```powershell
 python -m uvicorn app.main:app --reload
 ```
 
-The default local API address is `http://127.0.0.1:8000`.
+The local API is available at `http://127.0.0.1:8000`.
 
-## Frontend Development
+## Frontend development
 
-Run frontend commands from `frontend/`.
-
-The frontend requires Node.js and npm.
-
-Install the locked Node.js dependencies:
-
-```text
-npm ci
-```
-
-The frontend reads `VITE_API_BASE_URL` at build time. Set it to the backend
-address when it differs from the default local value:
-
-Windows PowerShell:
+Run commands from `frontend/`. Install the exact lockfile dependencies and
+start the development server:
 
 ```powershell
+npm ci
 $env:VITE_API_BASE_URL = "http://127.0.0.1:8000"
-```
-
-Unix-like shells:
-
-```sh
-export VITE_API_BASE_URL=http://127.0.0.1:8000
-```
-
-Start the Vite development server:
-
-```text
 npm run dev
 ```
 
-## API Documentation and Probes
+`VITE_API_BASE_URL` is consumed at build time and must point to the deployed API
+for a production frontend build.
 
-With the backend running, FastAPI exposes:
+## API probes
 
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
-- OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
+- `GET /health`: process liveness endpoint; it does not check the database.
+- `GET /ready`: database readiness endpoint; requires connectivity and the
+  application schema, returning HTTP 503 when not ready.
 
-`GET /health` is a liveness-style database check. It returns HTTP 200 with
-`status: healthy` when a database query succeeds. If the query fails, it still
-returns HTTP 200 with `status: unhealthy` and does not expose database details.
+## Verification
 
-`GET /ready` is a readiness check. It returns HTTP 200 only when the database
-is reachable and all required application tables exist. Database connection
-failures or missing required tables return HTTP 503 with a generic error.
+From the repository root:
 
-## Verification Commands
-
-Run backend tests from the repository root:
-
-```text
-python -m pytest -v
+```powershell
+python -m compileall -q app cv_engine scripts tests
+python -m pip check
+python -m pytest -q
+git diff --check
 ```
 
-Run frontend checks from `frontend/`:
+From `frontend/`:
 
-```text
+```powershell
+npm ci
 npm run lint
 npm run build
 ```
 
-## Development and Production
-
-The commands above are development commands. The backend command uses
-`--reload`, and the local database is a relative SQLite file. The frontend
-development server is also not a production hosting service.
-
-Before production deployment, the deployment plan must provide all of the
-following without assuming a particular hosting provider:
-
-- A unique production `SECRET_KEY` and environment-specific token settings.
-- Exact production frontend origins in `CORS_ORIGINS`.
-- Durable database storage suitable for the deployment topology.
-- A selected and implemented database migration system. `create_all` is not a
-  replacement for migrations.
-- A production `VITE_API_BASE_URL` value supplied when the frontend is built.
-- A backend process command without `--reload` and health/readiness probes.
-- A method to serve the built frontend assets.
-
-No production hosting provider, deployment URL, infrastructure, credentials,
-or migration tool is defined by this repository.
+See [production deployment](./docs/DEPLOYMENT.md) for Render, PostgreSQL,
+migrations, and frontend deployment configuration.

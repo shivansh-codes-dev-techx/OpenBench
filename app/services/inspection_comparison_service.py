@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import Any
 
@@ -12,6 +13,8 @@ from cv_engine.inspection import inspect_all_angles
 from cv_engine.quality import ImageValidationError, assess_image_quality
 
 
+logger = logging.getLogger(__name__)
+
 _COMPARISONS = (
     ("baseline_vs_initial", "baseline", "initial"),
     ("initial_vs_final", "initial", "final"),
@@ -22,11 +25,11 @@ _COMPARISONS = (
 def decode_image_bytes(image_data: bytes | bytearray | memoryview) -> np.ndarray:
     """Validate stored image bytes and decode them to an OpenCV BGR array."""
     if not isinstance(image_data, (bytes, bytearray, memoryview)):
-        raise ValueError("Image data must be bytes.")
+        raise ImageValidationError("Image data must be bytes.")
 
     encoded = bytes(image_data)
     if not encoded:
-        raise ValueError("Image data is empty.")
+        raise ImageValidationError("Image data is empty.")
 
     try:
         assess_image_quality(encoded)
@@ -34,12 +37,10 @@ def decode_image_bytes(image_data: bytes | bytearray | memoryview) -> np.ndarray
             np.frombuffer(encoded, dtype=np.uint8),
             cv2.IMREAD_COLOR,
         )
-    except (
-        ImageValidationError,
-        Image.DecompressionBombError,
-        cv2.error,
-    ) as exc:
-        raise ValueError(f"Image could not be decoded: {exc}") from exc
+    except ImageValidationError:
+        raise
+    except (Image.DecompressionBombError, cv2.error) as exc:
+        raise ImageValidationError("Image could not be decoded.") from exc
 
     if (
         image is None
@@ -55,6 +56,8 @@ def decode_image_bytes(image_data: bytes | bytearray | memoryview) -> np.ndarray
 
 def _prepare_image_set(
     images: Mapping[str, bytes],
+    *,
+    stage_name: str,
 ) -> dict[str, Any]:
     if not isinstance(images, Mapping):
         raise TypeError("Inspection images must be provided as a mapping.")
@@ -86,8 +89,20 @@ def _prepare_image_set(
     for angle, image_data in encoded_by_angle.items():
         try:
             decoded_by_angle[angle] = decode_image_bytes(image_data)
-        except Exception as exc:
-            errors[angle] = f"{type(exc).__name__}: {exc}"
+        except ImageValidationError as exc:
+            logger.exception(
+                "Inspection image validation failed (stage=%s, angle=%s)",
+                stage_name,
+                angle,
+            )
+            errors[angle] = str(exc)
+        except Exception:
+            logger.exception(
+                "Inspection image processing failure (stage=%s, angle=%s)",
+                stage_name,
+                angle,
+            )
+            errors[angle] = "Image could not be processed."
 
     return {
         "images": decoded_by_angle,
@@ -199,9 +214,18 @@ def compare_inspection_stages(
 ) -> dict[str, Any]:
     """Compare baseline/INITIAL/FINAL images for all required inspection angles."""
     prepared = {
-        "baseline": _prepare_image_set(baseline_images),
-        "initial": _prepare_image_set(initial_images),
-        "final": _prepare_image_set(final_images),
+        "baseline": _prepare_image_set(
+            baseline_images,
+            stage_name="baseline",
+        ),
+        "initial": _prepare_image_set(
+            initial_images,
+            stage_name="initial",
+        ),
+        "final": _prepare_image_set(
+            final_images,
+            stage_name="final",
+        ),
     }
 
     comparisons = {

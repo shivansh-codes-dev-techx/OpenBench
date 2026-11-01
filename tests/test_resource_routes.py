@@ -41,6 +41,7 @@ def test_context():
     app.dependency_overrides[get_db] = override_get_db
 
     with TestClient(app) as test_client:
+        test_client._testing_session = TestingSession
         yield test_client, TestingSession
 
     app.dependency_overrides.clear()
@@ -55,14 +56,17 @@ def register_user(client, name, email, role):
             "full_name": name,
             "email": email,
             "password": "StrongPass123",
-            "role": role,
+            "role": "STUDENT",
         },
     )
 
     assert response.status_code == 201
-
     token = response.json()["data"]["access_token"]
-
+    if role == "OWNER":
+        with client._testing_session() as db:
+            owner = db.query(User).filter_by(email=email).one()
+            owner.role = UserRole.OWNER
+            db.commit()
     return {"Authorization": f"Bearer {token}"}
 
 

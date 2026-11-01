@@ -15,6 +15,11 @@ from app.models.user import User
 from app.schemas.booking import BookingDecision
 from app.models.condition_report import ConditionReport
 from app.schemas.booking import ConditionReportCreate
+from app.services.booking_baseline_snapshot_service import (
+    BaselineApprovalValidationError,
+    stage_booking_baseline_snapshot,
+    validate_resource_baseline,
+)
 
 def _as_utc(value: datetime) -> datetime:
     """Normalize SQLite-naive and timezone-aware datetimes to UTC."""
@@ -140,12 +145,20 @@ def decide_booking(
     decision_data: BookingDecision,
 ) -> Booking:
     try:
-        booking = db.get(Booking, booking_id)
+        booking = db.scalar(
+            select(Booking)
+            .where(Booking.id == booking_id)
+            .with_for_update()
+        )
 
         if booking is None:
             raise LookupError("Booking not found")
 
-        resource = db.get(Resource, booking.resource_id)
+        resource = db.scalar(
+            select(Resource)
+            .where(Resource.id == booking.resource_id)
+            .with_for_update()
+        )
 
         if resource is None:
             raise LookupError("Resource not found")
@@ -194,6 +207,24 @@ def decide_booking(
                 raise ValueError(
                     "Resource already has an overlapping approved or active booking"
                 )
+
+            baseline_validation = validate_resource_baseline(
+                db, resource_id=resource.id
+            )
+            if (
+                baseline_validation["missing_angles"]
+                or baseline_validation["invalid_angles"]
+            ):
+                raise BaselineApprovalValidationError(
+                    baseline_validation["missing_angles"],
+                    baseline_validation["invalid_angles"],
+                )
+
+            # Stage the snapshot in this session. The single commit below persists
+            # booking approval, activity log, and all six snapshot images together.
+            stage_booking_baseline_snapshot(
+                db, booking_id=booking.id, actor=actor
+            )
 
             booking.status = BookingStatus.APPROVED
             booking.approved_by_id = actor.id
@@ -256,6 +287,54 @@ def get_booking_by_id(
 
     return booking
 
+
+def cancel_booking(
+    db: Session,
+    booking_id: int,
+    actor: User,
+) -> Booking:
+    try:
+        booking = db.scalar(
+            select(Booking)
+            .where(Booking.id == booking_id)
+            .with_for_update()
+        )
+        if booking is None:
+            raise LookupError("Booking not found")
+
+        if actor.role != UserRole.STUDENT or booking.student_id != actor.id:
+            raise PermissionError("Only the booking student can cancel this booking")
+
+        if booking.status not in (BookingStatus.PENDING, BookingStatus.APPROVED):
+            raise RuntimeError(
+                "Only pending or approved bookings can be cancelled"
+            )
+
+        if _as_utc(booking.start_at) <= datetime.now(timezone.utc):
+            raise RuntimeError("Bookings cannot be cancelled after they start")
+
+        previous_status = booking.status
+        booking.status = BookingStatus.CANCELLED
+        db.add(
+            ActivityLog(
+                actor_id=actor.id,
+                action="BOOKING_CANCELLED",
+                entity_type="BOOKING",
+                entity_id=booking.id,
+                details=json.dumps({
+                    "previous_status": previous_status.value,
+                    "new_status": BookingStatus.CANCELLED.value,
+                }),
+            )
+        )
+        db.commit()
+        db.refresh(booking)
+        return booking
+    except Exception:
+        db.rollback()
+        raise
+
+
 def create_condition_report(
     db: Session,
     booking_id: int,
@@ -277,13 +356,14 @@ def create_condition_report(
         if resource is None:
             raise LookupError("Resource not found")
 
-        is_admin = actor.role == UserRole.ADMIN
-        is_student = booking.student_id == actor.id
-        is_owner = resource.owner_id == actor.id
+        is_student = (
+            actor.role == UserRole.STUDENT
+            and booking.student_id == actor.id
+        )
 
-        if not (is_admin or is_student or is_owner):
-            raise PermissionError(
-                "You are not allowed to submit a report for this booking"
+        if not is_student:
+           raise PermissionError(
+               "Only the booking student can submit this condition report"
             )
 
         if report_type == "INITIAL":
@@ -348,7 +428,11 @@ def check_in_booking(
     actor: User,
 ) -> Booking:
     try:
-        booking = db.get(Booking, booking_id)
+        booking = db.scalar(
+            select(Booking)
+            .where(Booking.id == booking_id)
+            .with_for_update()
+        )
 
         if booking is None:
             raise LookupError("Booking not found")
@@ -415,7 +499,11 @@ def check_out_booking(
     actor: User,
 ) -> Booking:
     try:
-        booking = db.get(Booking, booking_id)
+        booking = db.scalar(
+            select(Booking)
+            .where(Booking.id == booking_id)
+            .with_for_update()
+        )
 
         if booking is None:
             raise LookupError("Booking not found")

@@ -68,3 +68,7 @@ class Booking(Base):
     approver: Mapped["User | None"] = relationship(
         foreign_keys=[approved_by_id]
     )
+    baseline_snapshot: Mapped["BookingBaselineSnapshot | None"] = relationship(
+        back_populates="booking",
+        uselist=False,
+    )

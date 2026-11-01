@@ -173,12 +173,25 @@ def test_alignment_failure_is_preserved_and_requires_review(monkeypatch):
     assert comparison["overall_score_status"] == "PARTIAL"
 
 
-def test_unexpected_decoder_error_is_local_to_one_angle(monkeypatch):
+@pytest.mark.parametrize(
+    "error_factory",
+    [
+        lambda: RuntimeError("private decoder path detail"),
+        lambda: ValueError("private decoder validation detail"),
+        lambda: cv2.error("private OpenCV decoder detail"),
+    ],
+    ids=["runtime-error", "value-error", "opencv-error"],
+)
+def test_decoder_exception_details_are_logged_but_redacted_from_response(
+    monkeypatch,
+    caplog,
+    error_factory,
+):
     from app.services import inspection_comparison_service as service
 
     def decoder(image_data):
         if image_data == b"unexpected-decoder-error":
-            raise RuntimeError("decoder defect")
+            raise error_factory()
         return np.zeros((32, 32, 3), dtype=np.uint8)
 
     monkeypatch.setattr(service, "decode_image_bytes", decoder)
@@ -199,6 +212,12 @@ def test_unexpected_decoder_error_is_local_to_one_angle(monkeypatch):
 
     assert comparison["status"] == "PARTIAL"
     assert comparison["angles"]["FRONT"]["status"] == "FAILED"
-    assert "RuntimeError: decoder defect" in comparison["angles"]["FRONT"]["message"]
+    assert comparison["angles"]["FRONT"]["message"] == (
+        "baseline: Image could not be processed."
+    )
+    assert "private" not in comparison["angles"]["FRONT"]["message"]
+    assert "private" in caplog.text
+    assert "stage=baseline" in caplog.text
+    assert "angle=FRONT" in caplog.text
     assert comparison["angles"]["BACK"]["status"] == "COMPLETED"
     assert "FRONT" in comparison["failed_angles"]

@@ -55,6 +55,11 @@ class Resource(Base):
         cascade="all, delete-orphan",
         order_by="ResourceImage.id",
     )
+    baseline_images: Mapped[list["ResourceBaselineImage"]] = relationship(
+        back_populates="resource",
+        cascade="all, delete-orphan",
+        order_by="ResourceBaselineImage.angle",
+    )
 
     @property
     def primary_image_url(self) -> str | None:

@@ -341,16 +341,27 @@ def test_blurry_image_is_reported_as_quality_warning():
     assert result.review_required is True
 
 
-def test_unexpected_processing_error_is_isolated_to_one_angle(
+@pytest.mark.parametrize(
+    "error_factory",
+    [
+        lambda: RuntimeError("private runtime detail"),
+        lambda: ValueError("private validation detail"),
+        lambda: cv2.error("private OpenCV detail"),
+    ],
+    ids=["runtime-error", "value-error", "opencv-error"],
+)
+def test_processing_errors_are_logged_and_sanitized_per_angle(
     inspection_images,
     monkeypatch,
+    caplog,
+    error_factory,
 ):
     initial, final = inspection_images
     real_inspect_angle = inspect_angle
 
     def fail_unexpectedly(angle, initial_image, final_image):
         if angle == "FRONT":
-            raise RuntimeError("unexpected processing defect")
+            raise error_factory()
         return real_inspect_angle(angle, initial_image, final_image)
 
     monkeypatch.setattr(
@@ -364,7 +375,10 @@ def test_unexpected_processing_error_is_isolated_to_one_angle(
     assert result.completed_angles == 5
     assert result.angles["FRONT"].status == "FAILED"
     assert result.angles["FRONT"].similarity_score is None
-    assert "RuntimeError: unexpected processing defect" in result.angles["FRONT"].message
+    assert result.angles["FRONT"].message == "Image comparison could not be processed."
+    assert "private" not in result.angles["FRONT"].message
+    assert "private" in caplog.text
+    assert "angle=FRONT" in caplog.text
     assert result.angles["BACK"].status == "COMPLETED"
     assert result.attention_required is True
     assert result.manual_review_required is True

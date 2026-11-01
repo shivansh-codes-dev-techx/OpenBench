@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from sqlalchemy import select
@@ -15,10 +15,14 @@ from app.services.booking_service import get_booking_by_id
 from app.services.inspection_comparison_service import (
     compare_inspection_stages,
 )
-from cv_engine.angles import REQUIRED_ANGLES
+from cv_engine.angles import REQUIRED_ANGLES, validate_angles
 
 
 logger = logging.getLogger(__name__)
+
+BaselineImageProvider = Callable[
+    [Session, int, User], Mapping[str, bytes] | None
+]
 
 _COMPARISON_STAGES = {
     "baseline_vs_initial": ("baseline", "initial"),
@@ -29,6 +33,63 @@ _COMPARISON_STAGES = {
 
 class InspectionComparisonError(RuntimeError):
     """Raised when the CV engine cannot produce an inspection comparison."""
+
+
+def _snapshot_baseline_provider(
+    db: Session,
+    booking_id: int,
+    actor: User,
+) -> Mapping[str, bytes] | None:
+    try:
+        from app.services.booking_baseline_snapshot_service import (
+            get_booking_baseline_snapshot_images,
+        )
+        from app.services.baseline_snapshot_adapter import (
+            snapshot_records_to_angle_bytes,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name in {
+            "app.services.booking_baseline_snapshot_service",
+            "app.services.baseline_snapshot_adapter",
+        }:
+            logger.info("Baseline snapshot service is not available yet")
+            return None
+        raise
+
+    snapshot, image_rows = get_booking_baseline_snapshot_images(
+        db,
+        booking_id=booking_id,
+        actor=actor,
+    )
+    if snapshot is None:
+        return None
+    return snapshot_records_to_angle_bytes(image_rows)
+
+
+def _baseline_stage_summary(
+    images: Mapping[str, bytes],
+) -> tuple[dict[str, Any], dict[str, bytes]]:
+    validation = validate_angles(list(images.keys()))
+    present_angles = set(validation.present)
+    invalid_angles = sorted({
+        *validation.invalid,
+        *validation.duplicates,
+    })
+    return (
+        {
+            "status": "AVAILABLE",
+            "report_id": None,
+            "present_angles": [
+                angle for angle in REQUIRED_ANGLES if angle in present_angles
+            ],
+            "missing_angles": [
+                angle for angle in REQUIRED_ANGLES if angle not in present_angles
+            ],
+            "invalid_angles": invalid_angles,
+            "reason": None,
+        },
+        dict(images),
+    )
 
 
 def _stage_summary(
@@ -125,6 +186,8 @@ def get_booking_inspection_comparisons(
     db: Session,
     booking_id: int,
     actor: User,
+    *,
+    baseline_provider: BaselineImageProvider | None = None,
 ) -> dict[str, Any]:
     """Return authorized, metadata-only comparison results for one booking."""
     booking: Booking = get_booking_by_id(db, booking_id, actor)
@@ -144,17 +207,47 @@ def get_booking_inspection_comparisons(
         for stage in ("initial", "final")
     }
 
-    stages: dict[str, dict[str, Any]] = {
-        "baseline": {
-            "status": "UNAVAILABLE",
-            "report_id": None,
-            "present_angles": [],
-            "missing_angles": list(REQUIRED_ANGLES),
-            "invalid_angles": [],
-            "reason": "No immutable baseline snapshot is available for this booking.",
-        }
-    }
-    image_sets: dict[str, dict[str, bytes]] = {"baseline": {}}
+    baseline_reason = "No immutable baseline snapshot is available for this booking."
+    baseline_summary: dict[str, Any]
+    baseline_images: dict[str, bytes] = {}
+    try:
+        provider = baseline_provider or _snapshot_baseline_provider
+        provided_images = provider(db, booking_id, actor)
+        if provided_images is None or (
+            isinstance(provided_images, Mapping) and not provided_images
+        ):
+            baseline_summary, _ = _stage_summary(
+                None,
+                unavailable_reason=baseline_reason,
+            )
+        elif not isinstance(provided_images, Mapping):
+            baseline_summary, _ = _stage_summary(
+                None,
+                unavailable_reason=(
+                    "Baseline provider returned an invalid image mapping."
+                ),
+            )
+        else:
+            baseline_summary, baseline_images = _baseline_stage_summary(
+                provided_images
+            )
+    except LookupError:
+        baseline_summary, _ = _stage_summary(
+            None,
+            unavailable_reason=baseline_reason,
+        )
+    except Exception:
+        logger.exception(
+            "Baseline image provider failed for booking %s",
+            booking_id,
+        )
+        baseline_summary, _ = _stage_summary(
+            None,
+            unavailable_reason="Baseline image retrieval failed.",
+        )
+
+    stages: dict[str, dict[str, Any]] = {"baseline": baseline_summary}
+    image_sets: dict[str, dict[str, bytes]] = {"baseline": baseline_images}
 
     for stage, stage_reports in reports_by_stage.items():
         if not stage_reports:
@@ -182,32 +275,16 @@ def get_booking_inspection_comparisons(
         stages[stage] = summary
         image_sets[stage] = stage_images
 
+    ready_pairs = {
+        name: all(
+            stages[stage]["status"] == "AVAILABLE"
+            for stage in pair
+        )
+        for name, pair in _COMPARISON_STAGES.items()
+    }
     comparisons: dict[str, dict[str, Any]] = {}
-    baseline_reason = stages["baseline"]["reason"]
-    for name in ("baseline_vs_initial", "baseline_vs_final"):
-        comparisons[name] = _unavailable_comparison(
-            name,
-            stages,
-            baseline_reason,
-        )
-
-    initial_ready = stages["initial"]["status"] == "AVAILABLE"
-    final_ready = stages["final"]["status"] == "AVAILABLE"
-    if not initial_ready or not final_ready:
-        missing_stage_reasons = [
-            stages[stage]["reason"]
-            for stage, is_ready in (
-                ("initial", initial_ready),
-                ("final", final_ready),
-            )
-            if not is_ready
-        ]
-        comparisons["initial_vs_final"] = _unavailable_comparison(
-            "initial_vs_final",
-            stages,
-            " ".join(missing_stage_reasons),
-        )
-    else:
+    engine_results = None
+    if any(ready_pairs.values()):
         try:
             engine_results = compare_inspection_stages(
                 image_sets["baseline"],
@@ -223,12 +300,26 @@ def get_booking_inspection_comparisons(
                 "Inspection comparison could not be completed."
             ) from exc
 
-        initial_final = engine_results["comparisons"]["initial_vs_final"]
-        initial_final["missing_angles"] = {
-            "initial": stages["initial"]["missing_angles"],
-            "final": stages["final"]["missing_angles"],
-        }
-        comparisons["initial_vs_final"] = initial_final
+    for name, (reference_name, target_name) in _COMPARISON_STAGES.items():
+        if ready_pairs[name] and engine_results is not None:
+            comparison = engine_results["comparisons"][name]
+            comparison["missing_angles"] = {
+                reference_name: stages[reference_name]["missing_angles"],
+                target_name: stages[target_name]["missing_angles"],
+            }
+            comparisons[name] = comparison
+            continue
+
+        unavailable_stages = [
+            stages[stage]["reason"]
+            for stage in (reference_name, target_name)
+            if stages[stage]["status"] != "AVAILABLE"
+            and stages[stage]["reason"]
+        ]
+        reason = " ".join(unavailable_stages) or (
+            "Required comparison images are unavailable."
+        )
+        comparisons[name] = _unavailable_comparison(name, stages, reason)
 
     unavailable = [
         name

@@ -23,6 +23,7 @@ from app.database import get_db
 from app.models.enums import UserRole
 from app.models.resource import Resource
 from app.models.resource_image import ResourceImage
+from app.models.resource_baseline_image import ResourceBaselineImage
 from app.models.user import User
 from app.schemas.resource import (
     ResourceCreate,
@@ -35,6 +36,20 @@ from app.services.resource_service import (
     get_resources,
     update_resource,
 )
+from app.services.resource_baseline_service import (
+    BaselineAccessDeniedError,
+    BaselineImageNotFoundError,
+    BaselineImageTooLargeError,
+    BaselineResourceNotFoundError,
+    DuplicateBaselineAngleError,
+    InvalidBaselineAngleError,
+    InvalidBaselineImageError,
+    UnsupportedBaselineImageTypeError,
+    create_resource_baseline_image,
+    list_resource_baseline_images,
+    replace_resource_baseline_image,
+)
+from cv_engine.quality import MAX_IMAGE_BYTES
 
 router = APIRouter(prefix="/resources", tags=["Resources"])
 
@@ -271,6 +286,103 @@ def get_resource_image(
     )
 
 
+def _baseline_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, BaselineResourceNotFoundError):
+        code = status.HTTP_404_NOT_FOUND
+    elif isinstance(exc, BaselineAccessDeniedError):
+        code = status.HTTP_403_FORBIDDEN
+    elif isinstance(exc, (DuplicateBaselineAngleError, BaselineImageNotFoundError)):
+        code = status.HTTP_409_CONFLICT
+    elif isinstance(exc, BaselineImageTooLargeError):
+        code = status.HTTP_413_CONTENT_TOO_LARGE
+    elif isinstance(exc, UnsupportedBaselineImageTypeError):
+        code = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+    elif isinstance(exc, (InvalidBaselineAngleError, InvalidBaselineImageError)):
+        code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    else:
+        raise exc
+    return HTTPException(status_code=code, detail=str(exc))
+
+
+def _baseline_metadata(image: ResourceBaselineImage) -> dict:
+    return {
+        "id": image.id,
+        "resource_id": image.resource_id,
+        "angle": image.angle,
+        "original_filename": image.original_filename,
+        "mime_type": image.mime_type,
+        "byte_size": image.byte_size,
+        "sha256": image.sha256,
+        "uploaded_at": image.uploaded_at,
+        "updated_at": image.updated_at,
+    }
+
+
+@router.post("/{resource_id}/baseline-images", status_code=status.HTTP_201_CREATED)
+async def upload_resource_baseline_image(
+    resource_id: int,
+    file: UploadFile = File(...),
+    angle: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+):
+    try:
+        image_data = await file.read(MAX_IMAGE_BYTES + 1)
+        if len(image_data) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="Image exceeds the 15 MiB size limit")
+        image = create_resource_baseline_image(
+            db, resource_id=resource_id, actor=current_user, angle=angle,
+            filename=file.filename, declared_mime_type=file.content_type,
+            image_data=image_data,
+        )
+        return _baseline_metadata(image)
+    except HTTPException:
+        raise
+    except (LookupError, PermissionError, ValueError) as exc:
+        raise _baseline_http_error(exc) from exc
+    finally:
+        await file.close()
+
+
+@router.put("/{resource_id}/baseline-images/{angle}")
+async def replace_resource_baseline_image_endpoint(
+    resource_id: int,
+    angle: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+):
+    try:
+        image_data = await file.read(MAX_IMAGE_BYTES + 1)
+        if len(image_data) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="Image exceeds the 15 MiB size limit")
+        image = replace_resource_baseline_image(
+            db, resource_id=resource_id, actor=current_user, angle=angle,
+            filename=file.filename, declared_mime_type=file.content_type,
+            image_data=image_data,
+        )
+        return _baseline_metadata(image)
+    except HTTPException:
+        raise
+    except (LookupError, PermissionError, ValueError) as exc:
+        raise _baseline_http_error(exc) from exc
+    finally:
+        await file.close()
+
+
+@router.get("/{resource_id}/baseline-images")
+def get_resource_baseline_images(
+    resource_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+):
+    try:
+        images = list_resource_baseline_images(db, resource_id=resource_id, actor=current_user)
+        return {"images": [_baseline_metadata(image) for image in images]}
+    except (LookupError, PermissionError, ValueError) as exc:
+        raise _baseline_http_error(exc) from exc
+
+
 @router.get("/{resource_id}", response_model=ResourceResponse)
 def get_resource_endpoint(
     resource_id: int,
@@ -317,6 +429,6 @@ def update_resource_endpoint(
         return update_resource(db, resource, update_data)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc

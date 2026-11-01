@@ -4,7 +4,7 @@ from pydantic import ValidationError
 
 from app.schemas.user import UserRegister
 from app.schemas.booking import BookingCreate
-from app.schemas.resource import ResourceCreate
+from app.schemas.resource import ResourceCreate, ResourceUpdate
 from app.schemas.qualification import QualificationReview
 
 from app.models.enums import (
@@ -30,6 +30,16 @@ def test_admin_registration_rejected():
             email="admin@example.com",
             password="password123",
             role=UserRole.ADMIN,
+        )
+
+
+def test_owner_registration_rejected():
+    with pytest.raises(ValidationError):
+        UserRegister(
+            full_name="Owner User",
+            email="owner@example.com",
+            password="StrongPass123",
+            role=UserRole.OWNER,
         )
 
 
@@ -71,6 +81,24 @@ def test_invalid_resource_availability():
             location="Block A",
             available_from="2026-10-31T15:00:00",
             available_until="2026-10-31T14:00:00",
+        )
+
+
+def test_resource_availability_rejects_mixed_timezone_inputs():
+    with pytest.raises(ValidationError):
+        ResourceCreate(
+            title="Science Lab",
+            category="Laboratory",
+            resource_type=ResourceType.SPACE,
+            location="Block A",
+            available_from="2026-10-31T14:00:00",
+            available_until="2026-10-31T15:00:00+00:00",
+        )
+
+    with pytest.raises(ValidationError):
+        ResourceUpdate(
+            available_from="2026-10-31T14:00:00",
+            available_until="2026-10-31T15:00:00+00:00",
         )
 
 

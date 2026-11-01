@@ -55,17 +55,17 @@ def test_register_student(db):
     assert user.hashed_password != "StrongPass123"
 
 
-def test_register_owner(db):
-    user_data = UserRegister(
+def test_register_owner_rejected_at_service_boundary(db):
+    user_data = UserRegister.model_construct(
         full_name="Test Owner",
         email="owner@example.com",
         password="StrongPass123",
         role=UserRole.OWNER,
+        institution=None,
     )
 
-    user = register_user(db, user_data)
-
-    assert user.role == UserRole.OWNER
+    with pytest.raises(ValueError, match="Only student accounts"):
+        register_user(db, user_data)
 
 
 def test_duplicate_email_rejected(db):

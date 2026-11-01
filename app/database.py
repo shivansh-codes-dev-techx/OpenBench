@@ -1,37 +1,42 @@
-
-import os
-
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
+from app.core.config import settings
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./openbench.db")
 
-# Render may provide postgres:// or postgresql://.
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace(
-        "postgres://",
-        "postgresql+psycopg://",
-        1,
-    )
-elif DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace(
-        "postgresql://",
-        "postgresql+psycopg://",
-        1,
-    )
+def normalize_database_url(database_url: str) -> str:
+    """Use the declared psycopg 3 driver for PostgreSQL connection URLs."""
+    normalized = database_url.strip()
+    if normalized.startswith("postgres://"):
+        return "postgresql+psycopg://" + normalized[len("postgres://"):]
+    if normalized.startswith("postgresql://"):
+        return "postgresql+psycopg://" + normalized[len("postgresql://"):]
+    if normalized.startswith("postgresql+psycopg2://"):
+        return "postgresql+psycopg://" + normalized[len("postgresql+psycopg2://"):]
+    return normalized
 
-connect_args = (
-    {"check_same_thread": False}
-    if DATABASE_URL.startswith("sqlite")
-    else {}
-)
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args=connect_args,
-    pool_pre_ping=True,
-)
+DATABASE_URL = normalize_database_url(settings.DATABASE_URL)
+
+
+def create_database_engine(database_url: str) -> Engine:
+    options = {"pool_pre_ping": True}
+    if database_url.startswith("sqlite:"):
+        options["connect_args"] = {"check_same_thread": False}
+
+    database_engine = create_engine(database_url, **options)
+    if database_engine.dialect.name == "sqlite":
+        @event.listens_for(database_engine, "connect")
+        def enable_sqlite_foreign_keys(connection, _record) -> None:
+            cursor = connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+    return database_engine
+
+
+engine = create_database_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(
     autocommit=False,

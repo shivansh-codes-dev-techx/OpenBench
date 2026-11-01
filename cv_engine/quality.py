@@ -62,7 +62,7 @@ def assess_image_quality(
 
             if image_format not in SUPPORTED_FORMATS:
                 raise ImageValidationError(
-                    f"Unsupported image format: {image_format}."
+                    "Unsupported image format."
                 )
 
             width, height = image.size

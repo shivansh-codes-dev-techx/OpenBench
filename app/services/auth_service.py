@@ -9,9 +9,8 @@ from app.core.security import hash_password, verify_password
 
 
 def register_user(db: Session, user_data: UserRegister) -> User:
-    # Defense-in-depth: public registration cannot create ADMIN.
-    if user_data.role == UserRole.ADMIN:
-        raise ValueError("Admin registration is not allowed")
+    if user_data.role != UserRole.STUDENT:
+        raise ValueError("Only student accounts can be registered publicly")
 
     email = str(user_data.email).lower()
 

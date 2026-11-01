@@ -1,8 +1,12 @@
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import sys
+from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
+import cv2
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import create_engine
@@ -19,6 +23,9 @@ from app.models.enums import BookingStatus, ResourceType, UserRole
 from app.models.resource import Resource
 from app.models.resource_image import ResourceImage
 from app.models.user import User
+from app.services.inspection_comparison_api_service import (
+    get_booking_inspection_comparisons,
+)
 from cv_engine.angles import REQUIRED_ANGLES
 
 
@@ -32,6 +39,94 @@ def _image_bytes() -> bytes:
     buffer = BytesIO()
     Image.fromarray(pixels).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def _install_complete_angle_engine(monkeypatch):
+    def inspect_all_angles(reference_images, target_images):
+        angles = {}
+        failed_angles = []
+        for angle in REQUIRED_ANGLES:
+            if angle not in reference_images or angle not in target_images:
+                failed_angles.append(angle)
+                angles[angle] = {
+                    "angle": angle,
+                    "status": "MISSING",
+                    "similarity_score": None,
+                    "difference_percentage": None,
+                    "potential_regions": [],
+                    "review_required": True,
+                    "attention_required": True,
+                    "manual_review_required": True,
+                    "message": "An image is missing.",
+                    "quality_warnings": [],
+                    "alignment_warnings": [],
+                }
+            else:
+                angles[angle] = {
+                    "angle": angle,
+                    "status": "COMPLETED",
+                    "similarity_score": 98.5,
+                    "difference_percentage": 0.5,
+                    "potential_regions": [],
+                    "review_required": False,
+                    "attention_required": False,
+                    "manual_review_required": True,
+                    "message": "Comparison completed.",
+                    "quality_warnings": [],
+                    "alignment_warnings": [],
+                }
+
+        completed = len(REQUIRED_ANGLES) - len(failed_angles)
+        score_status = (
+            "UNAVAILABLE" if completed == 0
+            else "PARTIAL" if completed < len(REQUIRED_ANGLES)
+            else "COMPLETE"
+        )
+        result = {
+            "status": "COMPLETED" if not failed_angles else "PARTIAL",
+            "total_angles": len(REQUIRED_ANGLES),
+            "completed_angles": completed,
+            "failed_angles": failed_angles,
+            "missing_angles": failed_angles,
+            "angles": angles,
+            "overall_similarity_score": 98.5 if completed else None,
+            "overall_score_status": score_status,
+            "overall_status": score_status,
+            "review_required": bool(failed_angles),
+            "attention_required": bool(failed_angles),
+            "manual_review_required": True,
+        }
+        return SimpleNamespace(to_dict=lambda: result)
+
+    monkeypatch.setattr(
+        "app.services.inspection_comparison_service.inspect_all_angles",
+        inspect_all_angles,
+    )
+
+
+def _install_baseline_storage_contract(monkeypatch, baseline_images):
+    snapshot = object()
+    image_rows = [object() for _ in REQUIRED_ANGLES]
+    reader = Mock(return_value=(snapshot, image_rows))
+    converter = Mock(return_value=baseline_images)
+
+    storage_module = ModuleType(
+        "app.services.booking_baseline_snapshot_service"
+    )
+    storage_module.get_booking_baseline_snapshot_images = reader
+    adapter_module = ModuleType("app.services.baseline_snapshot_adapter")
+    adapter_module.snapshot_records_to_angle_bytes = converter
+    monkeypatch.setitem(
+        sys.modules,
+        "app.services.booking_baseline_snapshot_service",
+        storage_module,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "app.services.baseline_snapshot_adapter",
+        adapter_module,
+    )
+    return reader, converter, image_rows
 
 
 class ComparisonContext:
@@ -290,6 +385,182 @@ def test_missing_baseline_never_uses_resource_gallery_images(comparison_context)
     assert data["stages"]["baseline"]["present_angles"] == []
 
 
+def test_mock_baseline_provider_runs_all_three_comparisons(
+    comparison_context,
+    monkeypatch,
+):
+    comparison_context.add_stage("initial", REQUIRED_ANGLES)
+    comparison_context.add_stage("final", REQUIRED_ANGLES)
+    _install_complete_angle_engine(monkeypatch)
+    baseline = {angle: _image_bytes() for angle in REQUIRED_ANGLES}
+    provider = Mock(return_value=baseline)
+
+    with comparison_context.session_factory() as db:
+        result = get_booking_inspection_comparisons(
+            db,
+            comparison_context.booking.id,
+            comparison_context.users["student"],
+            baseline_provider=provider,
+        )
+        provider.assert_called_once_with(
+            db,
+            comparison_context.booking.id,
+            comparison_context.users["student"],
+        )
+
+    assert result["stages"]["baseline"]["status"] == "AVAILABLE"
+    assert result["stages"]["baseline"]["present_angles"] == list(REQUIRED_ANGLES)
+    assert set(result["comparisons"]) == {
+        "baseline_vs_initial",
+        "initial_vs_final",
+        "baseline_vs_final",
+    }
+    for comparison in result["comparisons"].values():
+        assert comparison["overall_status"] == "COMPLETE"
+        assert comparison["completed_angles"] == 6
+        assert comparison["failed_angles"] == []
+        assert comparison["manual_review_required"] is True
+    assert result["status"] == "COMPLETED"
+
+
+def test_storage_service_and_adapter_receive_authenticated_actor(
+    comparison_context,
+    monkeypatch,
+):
+    comparison_context.add_stage("initial", REQUIRED_ANGLES)
+    comparison_context.add_stage("final", REQUIRED_ANGLES)
+    _install_complete_angle_engine(monkeypatch)
+    baseline = {angle: _image_bytes() for angle in REQUIRED_ANGLES}
+    reader, converter, image_rows = _install_baseline_storage_contract(
+        monkeypatch,
+        baseline,
+    )
+
+    with comparison_context.session_factory() as db:
+        result = get_booking_inspection_comparisons(
+            db,
+            comparison_context.booking.id,
+            comparison_context.users["student"],
+        )
+        reader.assert_called_once_with(
+            db,
+            booking_id=comparison_context.booking.id,
+            actor=comparison_context.users["student"],
+        )
+        converter.assert_called_once_with(image_rows)
+
+    assert all(
+        result["comparisons"][name]["overall_status"] == "COMPLETE"
+        for name in (
+            "baseline_vs_initial",
+            "initial_vs_final",
+            "baseline_vs_final",
+        )
+    )
+
+
+def test_incomplete_baseline_is_partial_and_preserves_initial_final(
+    comparison_context,
+    monkeypatch,
+):
+    comparison_context.add_stage("initial", REQUIRED_ANGLES)
+    comparison_context.add_stage("final", REQUIRED_ANGLES)
+    _install_complete_angle_engine(monkeypatch)
+    provider = Mock(return_value={"FRONT": _image_bytes()})
+
+    with comparison_context.session_factory() as db:
+        result = get_booking_inspection_comparisons(
+            db,
+            comparison_context.booking.id,
+            comparison_context.users["student"],
+            baseline_provider=provider,
+        )
+
+    baseline_initial = result["comparisons"]["baseline_vs_initial"]
+    assert baseline_initial["overall_status"] == "PARTIAL"
+    assert baseline_initial["completed_angles"] == 1
+    assert baseline_initial["missing_angles"]["baseline"] == [
+        angle for angle in REQUIRED_ANGLES if angle != "FRONT"
+    ]
+    assert result["comparisons"]["initial_vs_final"]["overall_status"] == "COMPLETE"
+    assert result["manual_review_required"] is True
+
+
+def test_corrupt_baseline_image_is_a_failed_angle_not_an_api_error(
+    comparison_context,
+    monkeypatch,
+):
+    comparison_context.add_stage("initial", REQUIRED_ANGLES)
+    comparison_context.add_stage("final", REQUIRED_ANGLES)
+    _install_complete_angle_engine(monkeypatch)
+    baseline = {angle: _image_bytes() for angle in REQUIRED_ANGLES}
+    baseline["FRONT"] = b"corrupt baseline bytes"
+    provider = Mock(return_value=baseline)
+
+    with comparison_context.session_factory() as db:
+        result = get_booking_inspection_comparisons(
+            db,
+            comparison_context.booking.id,
+            comparison_context.users["student"],
+            baseline_provider=provider,
+        )
+
+    baseline_initial = result["comparisons"]["baseline_vs_initial"]
+    assert baseline_initial["overall_status"] == "PARTIAL"
+    assert baseline_initial["angles"]["FRONT"]["status"] == "FAILED"
+    assert baseline_initial["angles"]["FRONT"]["similarity_score"] is None
+    assert "baseline:" in baseline_initial["angles"]["FRONT"]["message"]
+    assert "FRONT" in baseline_initial["failed_angles"]
+    assert result["comparisons"]["initial_vs_final"]["overall_status"] == "COMPLETE"
+
+
+def test_baseline_provider_failure_keeps_other_pair_available(
+    comparison_context,
+    monkeypatch,
+):
+    comparison_context.add_stage("initial", REQUIRED_ANGLES)
+    comparison_context.add_stage("final", REQUIRED_ANGLES)
+    _install_complete_angle_engine(monkeypatch)
+    provider = Mock(side_effect=RuntimeError("storage unavailable"))
+
+    with comparison_context.session_factory() as db:
+        result = get_booking_inspection_comparisons(
+            db,
+            comparison_context.booking.id,
+            comparison_context.users["student"],
+            baseline_provider=provider,
+        )
+
+    assert result["stages"]["baseline"]["status"] == "UNAVAILABLE"
+    assert result["comparisons"]["baseline_vs_initial"]["overall_status"] == "UNAVAILABLE"
+    assert result["comparisons"]["baseline_vs_final"]["overall_status"] == "UNAVAILABLE"
+    assert result["comparisons"]["initial_vs_final"]["overall_status"] == "COMPLETE"
+    assert result["manual_review_required"] is True
+
+
+def test_malformed_baseline_provider_result_is_unavailable(
+    comparison_context,
+    monkeypatch,
+):
+    comparison_context.add_stage("initial", REQUIRED_ANGLES)
+    comparison_context.add_stage("final", REQUIRED_ANGLES)
+    _install_complete_angle_engine(monkeypatch)
+    provider = Mock(return_value=["not", "an", "angle mapping"])
+
+    with comparison_context.session_factory() as db:
+        result = get_booking_inspection_comparisons(
+            db,
+            comparison_context.booking.id,
+            comparison_context.users["student"],
+            baseline_provider=provider,
+        )
+
+    assert result["stages"]["baseline"]["status"] == "UNAVAILABLE"
+    assert "invalid image mapping" in result["stages"]["baseline"]["reason"]
+    assert result["comparisons"]["baseline_vs_initial"]["overall_status"] == "UNAVAILABLE"
+    assert result["comparisons"]["initial_vs_final"]["overall_status"] == "COMPLETE"
+
+
 def test_incomplete_angles_are_reported_without_claiming_completion(comparison_context):
     comparison_context.add_stage("initial", ["FRONT"])
     comparison_context.add_stage("final", ["FRONT"])
@@ -354,3 +625,40 @@ def test_cv_engine_failure_returns_internal_server_error(
 
     assert response.status_code == 500
     assert response.json()["detail"] == "Inspection comparison could not be completed."
+
+
+@pytest.mark.parametrize(
+    "error_factory",
+    [
+        lambda: ValueError("private validation path detail"),
+        lambda: cv2.error("private OpenCV implementation detail"),
+    ],
+    ids=["value-error", "opencv-error"],
+)
+def test_processing_exception_details_are_logged_but_redacted_from_api(
+    comparison_context,
+    monkeypatch,
+    caplog,
+    error_factory,
+):
+    comparison_context.add_stage("initial", REQUIRED_ANGLES)
+    comparison_context.add_stage("final", REQUIRED_ANGLES)
+
+    def fail_angle(*args, **kwargs):
+        raise error_factory()
+
+    monkeypatch.setattr("cv_engine.inspection.inspect_angle", fail_angle)
+    response = comparison_context.client.get(
+        _url(comparison_context.booking.id)
+    )
+
+    assert response.status_code == 200
+    assert "private" not in response.text
+    assert "private" in caplog.text
+    data = response.json()["data"]
+    comparison = data["comparisons"]["initial_vs_final"]
+    assert comparison["angles"]["FRONT"]["message"] == (
+        "Image comparison could not be processed."
+    )
+    assert comparison["angles"]["FRONT"]["status"] == "FAILED"
+    assert comparison["manual_review_required"] is True

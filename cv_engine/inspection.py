@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -15,6 +16,7 @@ from cv_engine.quality import (
 )
 
 BLUR_VARIANCE_WARNING_THRESHOLD = 20.0
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -313,7 +315,11 @@ def inspect_all_angles(
                 final_image,
             )
 
-        except Exception as exc:
+        except ImageValidationError as exc:
+            logger.exception(
+                "Inspection image validation failed (angle=%s)",
+                angle,
+            )
 
             result = AngleInspectionResult(
                 angle=angle,
@@ -322,7 +328,24 @@ def inspect_all_angles(
                 difference_percentage=None,
                 potential_regions=[],
                 review_required=True,
-                message=f"{type(exc).__name__}: {exc}",
+                message=str(exc),
+                quality_warnings=[],
+                alignment_warnings=[],
+            )
+
+        except Exception:
+            logger.exception(
+                "Unexpected inspection processing failure (angle=%s)",
+                angle,
+            )
+            result = AngleInspectionResult(
+                angle=angle,
+                status="FAILED",
+                similarity_score=None,
+                difference_percentage=None,
+                potential_regions=[],
+                review_required=True,
+                message="Image comparison could not be processed.",
                 quality_warnings=[],
                 alignment_warnings=[],
             )

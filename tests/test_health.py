@@ -26,7 +26,15 @@ def isolated_engine(monkeypatch):
         engine.dispose()
 
 
-def test_health_response_remains_backward_compatible(isolated_engine):
+def test_health_is_liveness_only_even_when_database_is_unavailable(
+    monkeypatch, isolated_engine
+):
+    class UnavailableEngine:
+        def connect(self):
+            raise RuntimeError("database must not be queried by liveness")
+
+    monkeypatch.setattr(main_module, "engine", UnavailableEngine())
+
     with TestClient(app) as client:
         response = client.get("/health")
 
@@ -34,7 +42,6 @@ def test_health_response_remains_backward_compatible(isolated_engine):
     assert response.json() == {
         "success": True,
         "status": "healthy",
-        "database": "connected",
     }
 
 
@@ -46,7 +53,7 @@ def test_ready_returns_200_when_all_tables_exist(isolated_engine):
     assert response.json() == {
         "success": True,
         "status": "ready",
-        "database": "ready",
+        "database": "connected",
     }
 
 
@@ -57,7 +64,11 @@ def test_ready_returns_503_when_a_required_table_is_missing(isolated_engine):
         response = client.get("/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Service unavailable"}
+    assert response.json() == {
+        "success": False,
+        "status": "not_ready",
+        "database": "connected",
+    }
 
 
 def test_ready_returns_503_when_database_is_unavailable(monkeypatch):
@@ -71,6 +82,10 @@ def test_ready_returns_503_when_database_is_unavailable(monkeypatch):
         response = client.get("/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Service unavailable"}
+    assert response.json() == {
+        "success": False,
+        "status": "not_ready",
+        "database": "disconnected",
+    }
     assert "database path" not in response.text
     assert "SQL details" not in response.text

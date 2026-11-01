@@ -1,7 +1,9 @@
 ﻿
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -17,7 +19,14 @@ from app.models.resource import Resource
 from app.models.user import User
 from app.core.security import hash_password, create_access_token
 from app.models.condition_report import ConditionReport
-
+from app.models.booking_baseline_snapshot import (
+    BookingBaselineSnapshot,
+    BookingBaselineSnapshotImage,
+)
+from app.models.resource_baseline_image import ResourceBaselineImage
+from app.services.resource_baseline_service import create_resource_baseline_image
+from cv_engine.angles import REQUIRED_ANGLES
+from app.models.user import UserRole
 @pytest.fixture
 def test_context():
     engine = create_engine(
@@ -44,6 +53,7 @@ def test_context():
     app.dependency_overrides[get_db] = override_get_db
 
     with TestClient(app) as client:
+        client._testing_session = TestingSession
         yield client, TestingSession
 
     app.dependency_overrides.clear()
@@ -58,13 +68,19 @@ def register_user(client, name, email, role):
             "full_name": name,
             "email": email,
             "password": "StrongPass123",
-            "role": role,
+            "role": "STUDENT",
         },
     )
 
     assert response.status_code == 201
 
     token = response.json()["data"]["access_token"]
+
+    if role == "OWNER":
+        with client._testing_session() as db:
+            owner = db.query(User).filter_by(email=email).one()
+            owner.role = UserRole.OWNER
+            db.commit()
 
     return {"Authorization": f"Bearer {token}"}
 
@@ -113,6 +129,41 @@ def create_resource(client, owner_headers, title="Projector", **extra):
     assert response.status_code == 201
 
     return response.json()
+
+
+def add_complete_baseline(TestingSession, resource_id, owner_id):
+    buffer = BytesIO()
+    Image.new("RGB", (320, 320), (90, 120, 150)).save(buffer, format="PNG")
+    data = buffer.getvalue()
+    with TestingSession() as db:
+        owner = db.get(User, owner_id)
+        for angle in REQUIRED_ANGLES:
+            create_resource_baseline_image(
+                db,
+                resource_id=resource_id,
+                actor=owner,
+                angle=angle,
+                filename=f"{angle}.png",
+                declared_mime_type="image/png",
+                image_data=data,
+            )
+
+
+def add_resource_baseline_for_headers(TestingSession, resource):
+    # Resolve the authenticated owner from the resource row; this avoids depending
+    # on test-specific email names and supports the admin approval override case.
+    with TestingSession() as db:
+        stored_resource = db.get(Resource, resource["id"])
+        owner_id = stored_resource.owner_id
+    add_complete_baseline(TestingSession, resource["id"], owner_id)
+
+
+def create_booking_request(client, TestingSession, resource, student_headers):
+    return client.post(
+        "/bookings",
+        json=booking_payload(resource["id"]),
+        headers=student_headers,
+    )
 
 
 def booking_payload(resource_id, **extra):
@@ -434,10 +485,14 @@ def test_resource_owner_can_approve_booking_and_activity_is_logged(test_context)
     )
 
     resource = create_resource(client, owner)
+    with TestingSession() as db:
+        owner_user = db.scalar(
+            select(User).where(User.email == "owner-approval@example.com")
+        )
+        owner_id = owner_user.id
+    add_complete_baseline(TestingSession, resource["id"], owner_id)
     created = client.post(
-        "/bookings",
-        json=booking_payload(resource["id"]),
-        headers=student,
+        "/bookings", json=booking_payload(resource["id"]), headers=student
     )
     booking_id = created.json()["data"]["id"]
 
@@ -465,8 +520,178 @@ def test_resource_owner_can_approve_booking_and_activity_is_logged(test_context)
             )
         )
         assert log is not None
+        snapshot = db.scalar(
+            select(BookingBaselineSnapshot).where(
+                BookingBaselineSnapshot.booking_id == booking_id
+            )
+        )
+        assert snapshot is not None
+        assert len(
+            db.scalars(
+                select(BookingBaselineSnapshotImage).where(
+                    BookingBaselineSnapshotImage.snapshot_id == snapshot.id
+                )
+            ).all()
+        ) == len(REQUIRED_ANGLES)
     finally:
         db.close()
+
+
+def test_baseline_snapshot_endpoint_returns_metadata_and_per_angle_bytes(test_context):
+    client, TestingSession = test_context
+    student = register_user(
+        client, "Snapshot Reader", "snapshot-reader@example.com", "STUDENT"
+    )
+    owner = register_user(
+        client, "Snapshot Owner", "snapshot-owner@example.com", "OWNER"
+    )
+    resource = create_resource(client, owner)
+    add_resource_baseline_for_headers(TestingSession, resource)
+    created = client.post(
+        "/bookings", json=booking_payload(resource["id"]), headers=student
+    )
+    booking_id = created.json()["data"]["id"]
+    approved = client.patch(
+        f"/bookings/{booking_id}/decision",
+        json={"decision": "APPROVED"},
+        headers=owner,
+    )
+    assert approved.status_code == 200
+
+    metadata = client.get(
+        f"/bookings/{booking_id}/baseline-snapshot", headers=student
+    )
+    assert metadata.status_code == 200
+    payload = metadata.json()
+    assert {item["angle"] for item in payload["images"]} == set(REQUIRED_ANGLES)
+    assert all("image_data_base64" not in item for item in payload["images"])
+    assert all("image_url" in item for item in payload["images"])
+
+    image_response = client.get(
+        f"/bookings/{booking_id}/baseline-snapshot/FRONT", headers=student
+    )
+    assert image_response.status_code == 200
+    assert image_response.headers["content-type"] == "image/png"
+    assert image_response.headers["x-inspection-angle"] == "FRONT"
+    assert image_response.content
+
+
+def test_approval_returns_422_with_missing_angles_and_leaves_booking_pending(
+    test_context,
+):
+    client, TestingSession = test_context
+    student = register_user(
+        client,
+        "Missing Baseline Student",
+        "missing-baseline-student@example.com",
+        "STUDENT",
+    )
+    owner = register_user(
+        client,
+        "Missing Baseline Owner",
+        "missing-baseline-owner@example.com",
+        "OWNER",
+    )
+    resource = create_resource(client, owner)
+    created = client.post(
+        "/bookings", json=booking_payload(resource["id"]), headers=student
+    )
+    booking_id = created.json()["data"]["id"]
+
+    response = client.patch(
+        f"/bookings/{booking_id}/decision",
+        json={"decision": "APPROVED"},
+        headers=owner,
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["missing_angles"] == list(REQUIRED_ANGLES)
+    assert detail["invalid_angles"] == {}
+    with TestingSession() as db:
+        booking = db.get(Booking, booking_id)
+        assert booking.status == BookingStatus.PENDING
+        assert db.scalar(
+            select(BookingBaselineSnapshot).where(
+                BookingBaselineSnapshot.booking_id == booking_id
+            )
+        ) is None
+        assert db.scalar(
+            select(ActivityLog).where(
+                ActivityLog.entity_id == booking_id,
+                ActivityLog.action == "BOOKING_APPROVED",
+            )
+        ) is None
+
+
+def test_approval_returns_422_for_corrupted_baseline_and_can_retry_after_replacement(
+    test_context,
+):
+    client, TestingSession = test_context
+    student = register_user(
+        client,
+        "Invalid Baseline Student",
+        "invalid-baseline-student@example.com",
+        "STUDENT",
+    )
+    owner = register_user(
+        client,
+        "Invalid Baseline Owner",
+        "invalid-baseline-owner@example.com",
+        "OWNER",
+    )
+    resource = create_resource(client, owner)
+    with TestingSession() as db:
+        owner_user = db.scalar(
+            select(User).where(User.email == "invalid-baseline-owner@example.com")
+        )
+        owner_id = owner_user.id
+    add_complete_baseline(TestingSession, resource["id"], owner_id)
+    with TestingSession() as db:
+        baseline = db.scalar(
+            select(ResourceBaselineImage).where(
+                ResourceBaselineImage.resource_id == resource["id"],
+                ResourceBaselineImage.angle == "LEFT",
+            )
+        )
+        baseline.image_data = b"corrupt"
+        db.commit()
+    created = client.post(
+        "/bookings", json=booking_payload(resource["id"]), headers=student
+    )
+    booking_id = created.json()["data"]["id"]
+    failed = client.patch(
+        f"/bookings/{booking_id}/decision",
+        json={"decision": "APPROVED"},
+        headers=owner,
+    )
+    assert failed.status_code == 422
+    assert "LEFT" in failed.json()["detail"]["invalid_angles"]
+    with TestingSession() as db:
+        booking = db.get(Booking, booking_id)
+        assert booking.status == BookingStatus.PENDING
+        baseline = db.scalar(
+            select(ResourceBaselineImage).where(
+                ResourceBaselineImage.resource_id == resource["id"],
+                ResourceBaselineImage.angle == "LEFT",
+            )
+        )
+        baseline.image_data = b""
+        db.commit()
+    # Explicit replacement is done through the owner-only resource API.
+    image = BytesIO()
+    Image.new("RGB", (320, 320), (100, 100, 100)).save(image, format="PNG")
+    replaced = client.put(
+        f"/resources/{resource['id']}/baseline-images/LEFT",
+        files={"file": ("left.png", image.getvalue(), "image/png")},
+        headers=owner,
+    )
+    assert replaced.status_code == 200
+    retried = client.patch(
+        f"/bookings/{booking_id}/decision",
+        json={"decision": "APPROVED"},
+        headers=owner,
+    )
+    assert retried.status_code == 200
 
 
 def test_resource_owner_can_reject_booking(test_context):
@@ -481,9 +706,7 @@ def test_resource_owner_can_reject_booking(test_context):
 
     resource = create_resource(client, owner)
     created = client.post(
-        "/bookings",
-        json=booking_payload(resource["id"]),
-        headers=student,
+        "/bookings", json=booking_payload(resource["id"]), headers=student
     )
     booking_id = created.json()["data"]["id"]
 
@@ -510,10 +733,9 @@ def test_admin_can_override_booking_decision(test_context):
     admin = create_admin(TestingSession)
 
     resource = create_resource(client, owner)
+    add_resource_baseline_for_headers(TestingSession, resource)
     created = client.post(
-        "/bookings",
-        json=booking_payload(resource["id"]),
-        headers=student,
+        "/bookings", json=booking_payload(resource["id"]), headers=student
     )
     booking_id = created.json()["data"]["id"]
 
@@ -525,10 +747,17 @@ def test_admin_can_override_booking_decision(test_context):
 
     assert response.status_code == 200
     assert response.json()["data"]["status"] == "APPROVED"
+    with TestingSession() as db:
+        snapshot = db.scalar(
+            select(BookingBaselineSnapshot).where(
+                BookingBaselineSnapshot.booking_id == booking_id
+            )
+        )
+        assert snapshot is not None
 
 
 def test_student_cannot_decide_booking(test_context):
-    client, _ = test_context
+    client, TestingSession = test_context
 
     student = register_user(
         client, "Student Cannot Decide", "student-no-decision@example.com", "STUDENT"
@@ -538,11 +767,7 @@ def test_student_cannot_decide_booking(test_context):
     )
 
     resource = create_resource(client, owner)
-    created = client.post(
-        "/bookings",
-        json=booking_payload(resource["id"]),
-        headers=student,
-    )
+    created = create_booking_request(client, TestingSession, resource, student)
     booking_id = created.json()["data"]["id"]
 
     response = client.patch(
@@ -555,7 +780,7 @@ def test_student_cannot_decide_booking(test_context):
 
 
 def test_different_owner_cannot_decide_booking(test_context):
-    client, _ = test_context
+    client, TestingSession = test_context
 
     student = register_user(
         client, "Student Other Owner", "student-other-owner@example.com", "STUDENT"
@@ -568,11 +793,7 @@ def test_different_owner_cannot_decide_booking(test_context):
     )
 
     resource = create_resource(client, owner_one)
-    created = client.post(
-        "/bookings",
-        json=booking_payload(resource["id"]),
-        headers=student,
-    )
+    created = create_booking_request(client, TestingSession, resource, student)
     booking_id = created.json()["data"]["id"]
 
     response = client.patch(
@@ -585,7 +806,7 @@ def test_different_owner_cannot_decide_booking(test_context):
 
 
 def test_booking_cannot_be_decided_twice(test_context):
-    client, _ = test_context
+    client, TestingSession = test_context
 
     student = register_user(
         client, "Student Twice", "student-twice@example.com", "STUDENT"
@@ -595,11 +816,8 @@ def test_booking_cannot_be_decided_twice(test_context):
     )
 
     resource = create_resource(client, owner)
-    created = client.post(
-        "/bookings",
-        json=booking_payload(resource["id"]),
-        headers=student,
-    )
+    add_resource_baseline_for_headers(TestingSession, resource)
+    created = create_booking_request(client, TestingSession, resource, student)
     booking_id = created.json()["data"]["id"]
 
     first = client.patch(
@@ -629,9 +847,7 @@ def test_approval_rechecks_eligibility(test_context):
 
     resource = create_resource(client, owner)
     created = client.post(
-        "/bookings",
-        json=booking_payload(resource["id"]),
-        headers=student,
+        "/bookings", json=booking_payload(resource["id"]), headers=student
     )
     booking_id = created.json()["data"]["id"]
 
@@ -672,6 +888,7 @@ def test_approval_rejects_overlapping_approved_booking(test_context):
     )
 
     resource = create_resource(client, owner)
+    add_resource_baseline_for_headers(TestingSession, resource)
 
     first_payload = booking_payload(resource["id"])
     first = client.post(
@@ -869,6 +1086,7 @@ def test_student_can_submit_initial_condition_report(test_context):
     )
 
     resource = create_resource(client, owner)
+    add_resource_baseline_for_headers(TestingSession, resource)
     created = client.post(
         "/bookings",
         json=booking_payload(resource["id"]),
@@ -915,7 +1133,7 @@ def test_student_can_submit_initial_condition_report(test_context):
         db.close()
 
 
-def test_owner_can_submit_final_condition_report(test_context):
+def test_owner_cannot_submit_final_condition_report(test_context):
     client, TestingSession = test_context
 
     student = register_user(
@@ -950,12 +1168,11 @@ def test_owner_can_submit_final_condition_report(test_context):
         headers=owner,
     )
 
-    assert response.status_code == 201
-    assert response.json()["data"]["report_type"] == "FINAL"
+    assert response.status_code == 403
 
 
 def test_duplicate_initial_condition_report_is_rejected(test_context):
-    client, _ = test_context
+    client, TestingSession = test_context
 
     student = register_user(
         client, "Duplicate Student", "duplicate-report@example.com", "STUDENT"
@@ -965,11 +1182,8 @@ def test_duplicate_initial_condition_report_is_rejected(test_context):
     )
 
     resource = create_resource(client, owner)
-    created = client.post(
-        "/bookings",
-        json=booking_payload(resource["id"]),
-        headers=student,
-    )
+    add_resource_baseline_for_headers(TestingSession, resource)
+    created = create_booking_request(client, TestingSession, resource, student)
     booking_id = created.json()["data"]["id"]
 
     client.patch(
@@ -1025,7 +1239,7 @@ def test_initial_report_requires_approved_booking(test_context):
 
 
 def test_final_report_requires_in_use_booking(test_context):
-    client, _ = test_context
+    client, TestingSession = test_context
 
     student = register_user(
         client, "Approved Student", "approved-report@example.com", "STUDENT"
@@ -1035,11 +1249,7 @@ def test_final_report_requires_in_use_booking(test_context):
     )
 
     resource = create_resource(client, owner)
-    created = client.post(
-        "/bookings",
-        json=booking_payload(resource["id"]),
-        headers=student,
-    )
+    created = create_booking_request(client, TestingSession, resource, student)
     booking_id = created.json()["data"]["id"]
 
     client.patch(
@@ -1058,7 +1268,7 @@ def test_final_report_requires_in_use_booking(test_context):
 
 
 def test_unrelated_user_cannot_submit_condition_report(test_context):
-    client, _ = test_context
+    client, TestingSession = test_context
 
     student = register_user(
         client, "Report Student", "report-student@example.com", "STUDENT"
@@ -1071,11 +1281,7 @@ def test_unrelated_user_cannot_submit_condition_report(test_context):
     )
 
     resource = create_resource(client, owner)
-    created = client.post(
-        "/bookings",
-        json=booking_payload(resource["id"]),
-        headers=student,
-    )
+    created = create_booking_request(client, TestingSession, resource, student)
     booking_id = created.json()["data"]["id"]
 
     client.patch(
@@ -1176,6 +1382,7 @@ def test_student_cannot_access_owner_booking_list(test_context):
 
 def create_approved_booking(client, student, owner):
     resource = create_resource(client, owner, title="Lifecycle Test Resource")
+    add_resource_baseline_for_headers(client._testing_session, resource)
 
     response = client.post(
         "/bookings",
@@ -1241,7 +1448,7 @@ def test_student_can_check_in_with_initial_report(test_context):
         db.close()
 
 
-def test_owner_can_check_in_with_initial_report(test_context):
+def test_owner_can_check_in_after_student_submits_initial_report(test_context):
     client, _ = test_context
 
     student = register_user(
@@ -1253,7 +1460,7 @@ def test_owner_can_check_in_with_initial_report(test_context):
 
     booking_id = create_approved_booking(client, student, owner)
 
-    report = submit_condition_report(client, booking_id, owner, "INITIAL")
+    report = submit_condition_report(client, booking_id, student, "INITIAL")
     assert report.status_code == 201
 
     response = client.post(
@@ -1455,7 +1662,7 @@ def test_checkin_checkout_activity_logs_record_actual_actor(test_context):
 
     booking_id = create_approved_booking(client, student, owner)
 
-    initial = submit_condition_report(client, booking_id, owner, "INITIAL")
+    initial = submit_condition_report(client, booking_id, student, "INITIAL")
     assert initial.status_code == 201
 
     checkin = client.post(
@@ -1464,7 +1671,7 @@ def test_checkin_checkout_activity_logs_record_actual_actor(test_context):
     )
     assert checkin.status_code == 200
 
-    final = submit_condition_report(client, booking_id, owner, "FINAL")
+    final = submit_condition_report(client, booking_id, student, "FINAL")
     assert final.status_code == 201
 
     checkout = client.post(
@@ -1489,6 +1696,17 @@ def test_checkin_checkout_activity_logs_record_actual_actor(test_context):
 
         for log in logs:
             assert log.actor_id is not None
+            actor = db.get(User, log.actor_id)
+            assert actor is not None
+
+            expected_owner_id = db.scalar(
+                select(User.id).where(
+                    User.email == "actor_owner@example.com"
+                )
+            )
+
+            assert expected_owner_id is not None
+            assert log.actor_id == expected_owner_id
     finally:
         db.close()
 
@@ -1515,7 +1733,7 @@ def test_admin_can_check_in_and_check_out(test_context):
     assert checkin.status_code == 200
     assert checkin.json()["data"]["status"] == "IN_USE"
 
-    final = submit_condition_report(client, booking_id, owner, "FINAL")
+    final = submit_condition_report(client, booking_id, student, "FINAL")
     assert final.status_code == 201
 
     checkout = client.post(
@@ -1567,55 +1785,102 @@ def test_failed_checkin_does_not_change_booking_state(test_context):
         db.close()
 
 
-def test_activity_logs_record_exact_checkin_checkout_actor(test_context):
+def test_student_can_cancel_pending_booking_and_activity_is_logged(test_context):
     client, TestingSession = test_context
-
     student = register_user(
-        client, "Exact Actor Student", "exact_actor_student@example.com", "STUDENT"
+        client, "Cancel Student", "cancel_student@example.com", "STUDENT"
     )
     owner = register_user(
-        client, "Exact Actor Owner", "exact_actor_owner@example.com", "OWNER"
+        client, "Cancel Owner", "cancel_owner@example.com", "OWNER"
+    )
+    resource = create_resource(client, owner, title="Cancellable Resource")
+    response = create_booking_request(
+        client, TestingSession, resource, student
+    )
+    booking_id = response.json()["data"]["id"]
+
+    cancelled = client.post(
+        f"/bookings/{booking_id}/cancel",
+        headers=student,
     )
 
+    assert cancelled.status_code == 200
+    assert cancelled.json()["data"]["status"] == "CANCELLED"
+    with TestingSession() as db:
+        activity = db.scalar(
+            select(ActivityLog).where(
+                ActivityLog.entity_id == booking_id,
+                ActivityLog.action == "BOOKING_CANCELLED",
+            )
+        )
+        assert activity is not None
+        assert activity.actor_id is not None
+
+    repeated = client.post(
+        f"/bookings/{booking_id}/cancel",
+        headers=student,
+    )
+    assert repeated.status_code == 409
+
+
+def test_student_can_cancel_approved_booking_before_start(test_context):
+    client, _ = test_context
+    student = register_user(
+        client,
+        "Approved Cancel Student",
+        "approved_cancel_student@example.com",
+        "STUDENT",
+    )
+    owner = register_user(
+        client,
+        "Approved Cancel Owner",
+        "approved_cancel_owner@example.com",
+        "OWNER",
+    )
     booking_id = create_approved_booking(client, student, owner)
 
-    initial = submit_condition_report(client, booking_id, owner, "INITIAL")
-    assert initial.status_code == 201
-
-    checkin = client.post(
-        f"/bookings/{booking_id}/check-in",
-        headers=owner,
+    response = client.post(
+        f"/bookings/{booking_id}/cancel",
+        headers=student,
     )
-    assert checkin.status_code == 200
 
-    final = submit_condition_report(client, booking_id, owner, "FINAL")
-    assert final.status_code == 201
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "CANCELLED"
 
-    checkout = client.post(
-        f"/bookings/{booking_id}/check-out",
-        headers=owner,
+
+def test_only_booking_student_can_cancel_and_cannot_cancel_after_start(test_context):
+    client, TestingSession = test_context
+    student = register_user(
+        client, "Policy Student", "policy_student@example.com", "STUDENT"
     )
-    assert checkout.status_code == 200
+    owner = register_user(
+        client, "Policy Owner", "policy_owner@example.com", "OWNER"
+    )
+    unrelated = register_user(
+        client, "Other Student", "policy_other@example.com", "STUDENT"
+    )
+    resource = create_resource(client, owner, title="Policy Resource")
+    response = create_booking_request(
+        client, TestingSession, resource, student
+    )
+    booking_id = response.json()["data"]["id"]
 
-    db = TestingSession()
-    try:
-        for action in ("BOOKING_CHECKED_IN", "BOOKING_CHECKED_OUT"):
-            log = db.scalar(
-                select(ActivityLog).where(
-                    ActivityLog.entity_id == booking_id,
-                    ActivityLog.action == action,
-                )
-            )
-            assert log is not None
-            assert log.actor_id is not None
+    denied = client.post(
+        f"/bookings/{booking_id}/cancel",
+        headers=unrelated,
+    )
+    assert denied.status_code == 403
 
-            actor = db.get(User, log.actor_id)
-            assert actor is not None
-            assert actor.id == log.actor_id
-            assert actor.id == db.scalar(
-                select(Resource.owner_id)
-                .join(Booking, Booking.resource_id == Resource.id)
-                .where(Booking.id == booking_id)
-            )
-    finally:
-        db.close()
+    with TestingSession() as db:
+        booking = db.get(Booking, booking_id)
+        booking.start_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        db.commit()
+
+    too_late = client.post(
+        f"/bookings/{booking_id}/cancel",
+        headers=student,
+    )
+    assert too_late.status_code == 409
+    assert too_late.json()["detail"] == (
+        "Bookings cannot be cancelled after they start"
+    )

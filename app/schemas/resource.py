@@ -18,12 +18,14 @@ class ResourceCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_availability(self):
-        if (
-            self.available_from is not None
-            and self.available_until is not None
-            and self.available_until <= self.available_from
-        ):
-            raise ValueError("Availability end must be after start")
+        if self.available_from is not None and self.available_until is not None:
+            try:
+                if self.available_until <= self.available_from:
+                    raise ValueError("Availability end must be after start")
+            except TypeError as exc:
+                raise ValueError(
+                    "Availability dates must use compatible timezones"
+                ) from exc
         return self
 
 
@@ -39,12 +41,14 @@ class ResourceUpdate(BaseModel):
 
     @model_validator(mode="after")
     def validate_availability(self):
-        if (
-            self.available_from is not None
-            and self.available_until is not None
-            and self.available_until <= self.available_from
-        ):
-            raise ValueError("Availability end must be after start")
+        if self.available_from is not None and self.available_until is not None:
+            try:
+                if self.available_until <= self.available_from:
+                    raise ValueError("Availability end must be after start")
+            except TypeError as exc:
+                raise ValueError(
+                    "Availability dates must use compatible timezones"
+                ) from exc
         return self
 
 

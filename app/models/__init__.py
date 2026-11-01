@@ -7,6 +7,11 @@ from app.models.user_qualification import UserQualification
 from app.models.condition_report import ConditionReport
 from app.models.condition_report_image import ConditionReportImage
 from app.models.resource_image import ResourceImage
+from app.models.resource_baseline_image import ResourceBaselineImage
+from app.models.booking_baseline_snapshot import (
+    BookingBaselineSnapshot,
+    BookingBaselineSnapshotImage,
+)
 from app.models.incident import Incident
 from app.models.waitlist import Waitlist
 from app.models.activity_log import ActivityLog
@@ -20,6 +25,9 @@ __all__ = [
     "ConditionReport",
     "ConditionReportImage",
     "ResourceImage",
+    "ResourceBaselineImage",
+    "BookingBaselineSnapshot",
+    "BookingBaselineSnapshotImage",
     "Incident",
     "Waitlist",
     "ActivityLog",

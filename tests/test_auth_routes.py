@@ -90,6 +90,20 @@ def test_admin_registration_blocked(client):
     assert response.status_code == 422
 
 
+def test_owner_registration_blocked(client):
+    response = client.post(
+        "/auth/register",
+        json={
+            "full_name": "Owner User",
+            "email": "owner@example.com",
+            "password": "StrongPass123",
+            "role": "OWNER",
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_login_success(client):
     register_student(client)
 

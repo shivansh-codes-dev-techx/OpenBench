@@ -12,9 +12,11 @@ class UserRegister(BaseModel):
 
     @field_validator("role")
     @classmethod
-    def prevent_admin_registration(cls, value):
-        if value == UserRole.ADMIN:
-            raise ValueError("Admin registration is not allowed")
+    def restrict_public_registration(cls, value):
+        if value != UserRole.STUDENT:
+            raise ValueError(
+                "Only student accounts can be registered publicly"
+            )
         return value
 
 

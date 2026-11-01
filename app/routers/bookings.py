@@ -10,6 +10,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import require_roles
@@ -39,12 +40,20 @@ from app.services.inspection_comparison_api_service import (
     InspectionComparisonError,
     get_booking_inspection_comparisons,
 )
+from app.services.booking_baseline_snapshot_service import (
+    BaselineApprovalValidationError,
+    SnapshotAccessDeniedError,
+    SnapshotIntegrityError,
+    get_booking_baseline_snapshot_images,
+)
 from cv_engine.quality import MAX_IMAGE_BYTES
+from cv_engine.angles import REQUIRED_ANGLES
 from app.services.booking_service import (
     create_booking,
     get_my_bookings,
     decide_booking,
     get_booking_by_id,
+    cancel_booking,
     create_condition_report,
     get_owner_bookings,
     check_in_booking,
@@ -52,6 +61,84 @@ from app.services.booking_service import (
 )
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
+
+
+@router.get("/{booking_id}/baseline-snapshot")
+def get_booking_baseline_snapshot_endpoint(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.STUDENT, UserRole.OWNER, UserRole.ADMIN)
+    ),
+):
+    try:
+        snapshot, images = get_booking_baseline_snapshot_images(
+            db, booking_id=booking_id, actor=current_user
+        )
+        return {
+            "booking_id": booking_id,
+            "snapshot_id": snapshot.id,
+            "created_at": snapshot.created_at,
+            "images": [
+                {
+                    "angle": image.angle,
+                    "original_filename": image.original_filename,
+                    "mime_type": image.mime_type,
+                    "byte_size": image.byte_size,
+                    "sha256": image.sha256,
+                    "image_url": f"/bookings/{booking_id}/baseline-snapshot/{image.angle}",
+                }
+                for image in images
+            ],
+        }
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SnapshotAccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SnapshotIntegrityError as exc:
+        raise HTTPException(status_code=500, detail="Snapshot integrity verification failed") from exc
+
+
+@router.get("/{booking_id}/baseline-snapshot/{angle}")
+def get_booking_baseline_snapshot_image_endpoint(
+    booking_id: int,
+    angle: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.STUDENT, UserRole.OWNER, UserRole.ADMIN)
+    ),
+):
+    normalized_angle = angle.strip().upper()
+    if normalized_angle not in REQUIRED_ANGLES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Angle must be one of FRONT, BACK, LEFT, RIGHT, TOP, or BOTTOM",
+        )
+    try:
+        _, images = get_booking_baseline_snapshot_images(
+            db, booking_id=booking_id, actor=current_user
+        )
+        image = next(
+            (item for item in images if item.angle == normalized_angle),
+            None,
+        )
+        if image is None:
+            raise HTTPException(status_code=404, detail="Snapshot image not found")
+        return Response(
+            content=bytes(image.image_data),
+            media_type=image.mime_type,
+            headers={
+                "X-Inspection-Angle": image.angle,
+                "X-Content-SHA256": image.sha256,
+                "Cache-Control": "private, no-store",
+            },
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SnapshotAccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SnapshotIntegrityError as exc:
+        raise HTTPException(status_code=500, detail="Snapshot integrity verification failed") from exc
 
 
 def _inspection_image_metadata(booking, report, image) -> dict:
@@ -78,11 +165,11 @@ def _raise_inspection_image_error(exc: Exception) -> None:
     elif isinstance(exc, RuntimeError):
         code = status.HTTP_409_CONFLICT
     elif isinstance(exc, InspectionImageTooLargeError):
-        code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+        code = status.HTTP_413_CONTENT_TOO_LARGE
     elif isinstance(exc, UnsupportedInspectionImageTypeError):
         code = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
     elif isinstance(exc, (InvalidInspectionAngleError, InvalidInspectionImageError, ValueError)):
-        code = status.HTTP_422_UNPROCESSABLE_ENTITY
+        code = status.HTTP_422_UNPROCESSABLE_CONTENT
     else:
         raise exc
     raise HTTPException(status_code=code, detail=str(exc)) from exc
@@ -100,14 +187,14 @@ async def upload_condition_report_image_endpoint(
     angle: str = Form(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.STUDENT, UserRole.OWNER, UserRole.ADMIN)
+        require_roles(UserRole.STUDENT)
     ),
 ):
     try:
         image_data = await file.read(MAX_IMAGE_BYTES + 1)
         if len(image_data) > MAX_IMAGE_BYTES:
             raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 detail="Image exceeds the 15 MiB size limit",
             )
         booking, report, image = upload_condition_report_image(
@@ -346,6 +433,16 @@ def decide_booking_endpoint(
             detail=str(exc),
         ) from exc
 
+    except BaselineApprovalValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "message": str(exc),
+                "missing_angles": exc.missing_angles,
+                "invalid_angles": exc.invalid_angles,
+            },
+        ) from exc
+
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -470,11 +567,7 @@ def create_initial_condition_report_endpoint(
     report_data: ConditionReportCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(
-            UserRole.STUDENT,
-            UserRole.OWNER,
-            UserRole.ADMIN,
-        )
+        require_roles(UserRole.STUDENT)
     ),
 ):
     try:
@@ -532,11 +625,7 @@ def create_final_condition_report_endpoint(
     report_data: ConditionReportCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(
-            UserRole.STUDENT,
-            UserRole.OWNER,
-            UserRole.ADMIN,
-        )
+        require_roles(UserRole.STUDENT)
     ),
 ):
     try:
@@ -577,6 +666,39 @@ def create_final_condition_report_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
+
+# --------------------------------------------------
+# CANCEL BOOKING
+# POST /bookings/{booking_id}/cancel
+# --------------------------------------------------
+
+@router.post(
+    "/{booking_id}/cancel",
+    response_model=APIResponse,
+)
+def cancel_booking_endpoint(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.STUDENT)),
+):
+    try:
+        booking = cancel_booking(
+            db=db,
+            booking_id=booking_id,
+            actor=current_user,
+        )
+        return APIResponse(
+            success=True,
+            message="Booking cancelled successfully",
+            data=BookingResponse.model_validate(booking),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
 
 # --------------------------------------------------
 # CHECK IN BOOKING
