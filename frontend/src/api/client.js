@@ -1,3 +1,4 @@
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "")
     .trim()
     .replace(/\/+$/, "");
@@ -59,14 +60,26 @@ export async function apiRequest(endpoint, options = {}) {
     }
 
     const token = localStorage.getItem("openbench_token");
+    const isFormData = options.body instanceof FormData;
+
+    const headers = new Headers(options.headers || {});
+
+    // For FormData, the browser must set Content-Type
+    // automatically, including the multipart boundary.
+    if (isFormData) {
+        headers.delete("Content-Type");
+    } else if (!headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+    }
+
+    // Attach authentication token when available.
+    if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+    }
 
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         ...options,
-        headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            ...options.headers,
-        },
+        headers,
     });
 
     const responseText = await response.text();
@@ -90,7 +103,6 @@ export async function apiRequest(endpoint, options = {}) {
             `Request failed (${response.status}).`;
 
         const error = new Error(message);
-
         error.status = response.status;
 
         if (details !== undefined) {

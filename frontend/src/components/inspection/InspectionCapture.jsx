@@ -8,6 +8,7 @@ import {
     Trash2,
     X,
 } from "lucide-react";
+import { apiRequest, formatApiError } from "../../api/client";
 import "./InspectionCapture.css";
 
 const ANGLES = ["FRONT", "BACK", "LEFT", "RIGHT", "TOP", "BOTTOM"];
@@ -17,8 +18,51 @@ const MIN_DESCRIPTION_LENGTH = 10;
 const createEmptyImages = () =>
     Object.fromEntries(ANGLES.map((angle) => [angle, null]));
 
+// Handles common API response wrappers without assuming one exact shape.
+function extractReportId(response) {
+    const visited = new Set();
+
+    function search(value, depth = 0) {
+        if (!value || typeof value !== "object" || depth > 6) {
+            return null;
+        }
+
+        if (visited.has(value)) return null;
+        visited.add(value);
+
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                const result = search(item, depth + 1);
+                if (result !== null) return result;
+            }
+            return null;
+        }
+
+        if (value.report_id !== undefined && value.report_id !== null) {
+            return value.report_id;
+        }
+
+        // Prefer nested report objects before generic IDs.
+        for (const key of ["report", "condition_report", "data", "result"]) {
+            if (value[key] && typeof value[key] === "object") {
+                const result = search(value[key], depth + 1);
+                if (result !== null) return result;
+            }
+        }
+
+        if (value.id !== undefined && value.id !== null) {
+            return value.id;
+        }
+
+        return null;
+    }
+
+    return search(response);
+}
+
 export default function InspectionCapture({
     reportType = "initial",
+    bookingId,
     onCancel,
     onComplete,
 }) {
@@ -27,9 +71,14 @@ export default function InspectionCapture({
     const [description, setDescription] = useState("");
     const [errors, setErrors] = useState({});
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState("");
 
     const inputRefs = useRef({});
     const imageUrlsRef = useRef({});
+    const reportSessionRef = useRef({
+        reportId: null,
+        uploadedAngles: [],
+    });
 
     const completedCount = ANGLES.filter(
         (angle) => Boolean(images[angle])
@@ -40,17 +89,13 @@ export default function InspectionCapture({
     useEffect(() => {
         return () => {
             Object.values(imageUrlsRef.current).forEach((url) => {
-                if (url) {
-                    URL.revokeObjectURL(url);
-                }
+                if (url) URL.revokeObjectURL(url);
             });
         };
     }, []);
 
     const handleFileChange = (angle, event) => {
         const file = event.target.files?.[0];
-
-        // Allow selecting the same file again.
         event.target.value = "";
 
         if (!file) return;
@@ -73,6 +118,7 @@ export default function InspectionCapture({
 
         const previewUrl = URL.createObjectURL(file);
         const previousUrl = imageUrlsRef.current[angle];
+
         if (previousUrl) URL.revokeObjectURL(previousUrl);
 
         imageUrlsRef.current = {
@@ -99,6 +145,7 @@ export default function InspectionCapture({
 
     const removeImage = (angle) => {
         const previousUrl = imageUrlsRef.current[angle];
+
         if (previousUrl) URL.revokeObjectURL(previousUrl);
 
         const nextImageUrls = { ...imageUrlsRef.current };
@@ -126,21 +173,25 @@ export default function InspectionCapture({
         Object.values(imageUrlsRef.current).forEach((url) => {
             if (url) URL.revokeObjectURL(url);
         });
+
         imageUrlsRef.current = {};
+        reportSessionRef.current = {
+            reportId: null,
+            uploadedAngles: [],
+        };
 
         setImages(createEmptyImages());
         setImageUrls({});
         setDescription("");
         setErrors({});
+        setUploadProgress("");
 
         Object.values(inputRefs.current).forEach((input) => {
-            if (input) {
-                input.value = "";
-            }
+            if (input) input.value = "";
         });
     };
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         const missingAngles = ANGLES.filter(
             (angle) => !images[angle]
         );
@@ -148,10 +199,7 @@ export default function InspectionCapture({
         if (missingAngles.length > 0) {
             setErrors((previous) => ({
                 ...previous,
-                form:
-                    "Please add photos for: " +
-                    missingAngles.join(", ") +
-                    ".",
+                form: `Please add photos for: ${missingAngles.join(", ")}.`,
             }));
             return;
         }
@@ -159,29 +207,110 @@ export default function InspectionCapture({
         if (description.trim().length < MIN_DESCRIPTION_LENGTH) {
             setErrors((previous) => ({
                 ...previous,
-                form:
-                    "Please enter at least " +
-                    MIN_DESCRIPTION_LENGTH +
-                    " characters describing the condition.",
+                form: `Please enter at least ${MIN_DESCRIPTION_LENGTH} characters describing the condition.`,
             }));
             return;
         }
 
         setIsSubmitting(true);
+        setErrors({});
+        setUploadProgress("");
 
         try {
-            onComplete?.({
+            // Resource creation preview: intentionally local-only.
+            if (!bookingId) {
+                await onComplete?.({
+                    reportType,
+                    description: description.trim(),
+                    images: { ...images },
+                    savedToBackend: false,
+                });
+                return;
+            }
+
+            const reportLabel =
+                reportType === "final" ? "final" : "initial";
+
+            // Create the condition report once per open inspection session.
+            if (!reportSessionRef.current.reportId) {
+                setUploadProgress("Creating condition report...");
+
+                const reportResponse = await apiRequest(
+                    `/bookings/${bookingId}/condition-reports/${reportLabel}`,
+                    {
+                        method: "POST",
+                        body: JSON.stringify({
+                            condition_description: description.trim(),
+                        }),
+                    }
+                );
+
+                const reportId = extractReportId(reportResponse);
+
+                if (reportId === null) {
+                    throw new Error(
+                        "The report creation response did not contain a recognizable report ID. Do not reset or submit again yet; check the report in the backend first."
+                    );
+                }
+
+                reportSessionRef.current.reportId = reportId;
+            }
+
+            const reportId = reportSessionRef.current.reportId;
+
+            // Upload each required angle. Successful uploads are skipped on retry.
+            for (let index = 0; index < ANGLES.length; index += 1) {
+                const angle = ANGLES[index];
+
+                if (
+                    reportSessionRef.current.uploadedAngles.includes(angle)
+                ) {
+                    continue;
+                }
+
+                const file = images[angle];
+
+                setUploadProgress(
+                    `Uploading ${angle.toLowerCase()} photo (${index + 1}/6)...`
+                );
+
+                const formData = new FormData();
+                formData.append("file", file);
+                formData.append("angle", angle);
+
+                await apiRequest(
+                    `/bookings/${bookingId}/condition-reports/${reportId}/images`,
+                    {
+                        method: "POST",
+                        body: formData,
+                    }
+                );
+
+                reportSessionRef.current.uploadedAngles.push(angle);
+            }
+
+            setUploadProgress("Inspection saved successfully.");
+
+            await onComplete?.({
                 reportType,
                 description: description.trim(),
                 images: { ...images },
+                bookingId,
+                reportId,
+                savedToBackend: true,
             });
         } catch (error) {
-            console.error("Inspection completion failed:", error);
+            console.error("Inspection submission failed:", error);
 
             setErrors((previous) => ({
                 ...previous,
-                form: "Unable to complete the inspection. Please try again.",
+                form: formatApiError(
+                    error,
+                    "Unable to save the inspection. Please try again."
+                ),
             }));
+
+            setUploadProgress("");
         } finally {
             setIsSubmitting(false);
         }
@@ -327,7 +456,6 @@ export default function InspectionCapture({
                 ))}
             </div>
 
-            {/* A div is intentional here to avoid nested form submission. */}
             <div className="inspection-form">
                 <label htmlFor={`inspection-description-${reportType}`}>
                     Condition description
@@ -363,14 +491,21 @@ export default function InspectionCapture({
                     </p>
                 )}
 
-                <div className="inspection-demo-notice">
-                    <Camera size={17} />
+                {uploadProgress && (
+                    <p className="inspection-hint" role="status">
+                        {uploadProgress}
+                    </p>
+                )}
 
-                    <span>
-                        Demo mode: photos are kept in browser memory.
-                        They aren't uploaded or permanently stored.
-                    </span>
-                </div>
+                {!bookingId && (
+                    <div className="inspection-demo-notice">
+                        <Camera size={17} />
+                        <span>
+                            Preview mode: photos are held in browser memory
+                            and are not uploaded.
+                        </span>
+                    </div>
+                )}
 
                 <div className="inspection-footer">
                     <button
@@ -381,9 +516,9 @@ export default function InspectionCapture({
                     >
                         <CheckCircle2 size={17} />
 
-                        Complete{" "}
-                        {reportType === "final" ? "Final" : "Initial"}{" "}
-                        Inspection
+                        {isSubmitting
+                            ? "Saving inspection..."
+                            : `Complete ${reportType === "final" ? "Final" : "Initial"} Inspection`}
                     </button>
 
                     <button

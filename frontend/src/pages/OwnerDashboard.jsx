@@ -27,6 +27,55 @@ import ResourceImage from "../components/ResourceImage";
 import InspectionCapture from "../components/inspection/InspectionCapture";
 import "./OwnerDashboard.css";
 
+const RESOURCE_IMAGE_ANGLES = [
+    "FRONT",
+    "BACK",
+    "LEFT",
+    "RIGHT",
+    "TOP",
+    "BOTTOM",
+];
+
+function getResourceId(response) {
+    const visited = new Set();
+
+    function search(value, depth = 0) {
+        if (!value || typeof value !== "object" || depth > 6) {
+            return null;
+        }
+
+        if (visited.has(value)) return null;
+        visited.add(value);
+
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                const result = search(item, depth + 1);
+                if (result !== null) return result;
+            }
+            return null;
+        }
+
+        if (value.resource_id !== undefined && value.resource_id !== null) {
+            return value.resource_id;
+        }
+
+        for (const key of ["resource", "data", "result"]) {
+            if (value[key] && typeof value[key] === "object") {
+                const result = search(value[key], depth + 1);
+                if (result !== null) return result;
+            }
+        }
+
+        if (value.id !== undefined && value.id !== null) {
+            return value.id;
+        }
+
+        return null;
+    }
+
+    return search(response);
+}
+
 function getResourceIcon(resource) {
     const type = resource.resource_type?.toUpperCase();
     const title = resource.title?.toLowerCase() || "";
@@ -100,15 +149,20 @@ export default function OwnerDashboard() {
 
     const [activeInspection, setActiveInspection] = useState(null);
 
-    // Stores initial and final inspection data for each booking.
     const [inspectionsByBooking, setInspectionsByBooking] = useState({});
-
-    // Tracks which booking's comparison is currently open.
     const [activeComparisonBooking, setActiveComparisonBooking] = useState(null);
 
-    // Six-angle photos for a newly created resource.
     const [resourceInspectionImages, setResourceInspectionImages] = useState(null);
     const [showResourceInspection, setShowResourceInspection] = useState(false);
+    const [resourceUploadProgress, setResourceUploadProgress] = useState("");
+
+    // Retains the created resource ID and completed uploads if an upload fails.
+    // This prevents creating duplicate resources when retrying the image upload.
+    const pendingResourceUploadRef = useRef(null);
+
+    // React state controls the button label during rendering.
+    const [hasPendingResourceUpload, setHasPendingResourceUpload] =
+        useState(false);
 
     const [newResource, setNewResource] = useState({
         title: "",
@@ -158,7 +212,6 @@ export default function OwnerDashboard() {
         if (activeElement) moveHighlight(activeElement);
     }, [isNavOpen, activeNav]);
 
-    // Initial dashboard data loading.
     useEffect(() => {
         if (!user?.id) return;
 
@@ -286,6 +339,56 @@ export default function OwnerDashboard() {
         (request) => request.status?.toUpperCase() === "APPROVED"
     ).length;
 
+    async function uploadResourceImages(resourceId, imageFiles) {
+        const pending = pendingResourceUploadRef.current;
+
+        if (
+            !pending ||
+            Number(pending.resourceId) !== Number(resourceId)
+        ) {
+            pendingResourceUploadRef.current = {
+                resourceId,
+                uploadedAngles: [],
+            };
+
+            setHasPendingResourceUpload(true);
+        }
+
+        const uploadSession = pendingResourceUploadRef.current;
+
+        for (let index = 0; index < RESOURCE_IMAGE_ANGLES.length; index += 1) {
+            const angle = RESOURCE_IMAGE_ANGLES[index];
+
+            if (uploadSession.uploadedAngles.includes(angle)) {
+                continue;
+            }
+
+            const file = imageFiles[angle];
+
+            if (!file) {
+                throw new Error(`The ${angle} resource photo is missing.`);
+            }
+
+            setResourceUploadProgress(
+                `Uploading ${angle.toLowerCase()} photo (${index + 1}/6)...`
+            );
+
+            const formData = new FormData();
+            formData.append("file", file);
+            formData.append("is_primary", index === 0 ? "true" : "false");
+
+            await apiRequest(`/resources/${resourceId}/images`, {
+                method: "POST",
+                body: formData,
+            });
+
+            uploadSession.uploadedAngles.push(angle);
+        }
+
+        pendingResourceUploadRef.current = null;
+        setHasPendingResourceUpload(false);
+    }
+
     async function handleAddResource(event) {
         event.preventDefault();
 
@@ -293,6 +396,7 @@ export default function OwnerDashboard() {
             setSubmittingResource(true);
             setResourceError("");
             setSuccessMessage("");
+            setResourceUploadProgress("");
 
             const payload = {
                 title: newResource.title.trim(),
@@ -303,15 +407,59 @@ export default function OwnerDashboard() {
                 usage_rules: newResource.usage_rules.trim(),
             };
 
-            await apiRequest(
-                editingResourceId
-                    ? `/resources/${editingResourceId}`
-                    : "/resources",
-                {
-                    method: editingResourceId ? "PATCH" : "POST",
+            let resourceId = editingResourceId;
+
+            if (editingResourceId) {
+                await apiRequest(`/resources/${editingResourceId}`, {
+                    method: "PATCH",
                     body: JSON.stringify(payload),
+                });
+            } else {
+                const pending = pendingResourceUploadRef.current;
+
+                // If resource creation already succeeded but image uploads failed,
+                // retry uploads against that resource instead of creating another.
+                if (
+                    pending &&
+                    pending.title === payload.title &&
+                    Number(pending.ownerId) === Number(user?.id)
+                ) {
+                    resourceId = pending.resourceId;
+                } else {
+                    setResourceUploadProgress("Publishing resource...");
+
+                    const response = await apiRequest("/resources", {
+                        method: "POST",
+                        body: JSON.stringify(payload),
+                    });
+
+                    resourceId = getResourceId(response);
+
+                    if (resourceId === null) {
+                        throw new Error(
+                            "The resource may have been created, but its ID was not returned. Check My Resources before submitting again."
+                        );
+                    }
+
+                    if (resourceInspectionImages) {
+                        pendingResourceUploadRef.current = {
+                            resourceId,
+                            title: payload.title,
+                            ownerId: user?.id,
+                            uploadedAngles: [],
+                        };
+
+                        setHasPendingResourceUpload(true);
+                    }
                 }
-            );
+
+                if (resourceInspectionImages) {
+                    await uploadResourceImages(
+                        resourceId,
+                        resourceInspectionImages
+                    );
+                }
+            }
 
             setNewResource({
                 title: "",
@@ -326,12 +474,15 @@ export default function OwnerDashboard() {
             setShowResourceInspection(false);
             setEditingResourceId(null);
             setShowForm(false);
+            setResourceUploadProgress("");
+            pendingResourceUploadRef.current = null;
+            setHasPendingResourceUpload(false);
 
             setSuccessMessage(
                 editingResourceId
                     ? "Resource updated successfully."
                     : resourceInspectionImages
-                        ? "Resource published. Photo previews were not saved because the backend has no image-upload endpoint."
+                        ? "Resource published and all six photos uploaded successfully."
                         : "Resource published successfully."
             );
 
@@ -341,16 +492,14 @@ export default function OwnerDashboard() {
             console.error(
                 editingResourceId
                     ? "Update resource error:"
-                    : "Create resource error:",
+                    : "Create resource or image upload error:",
                 error
             );
 
             setResourceError(
                 formatApiError(
                     error,
-                    editingResourceId
-                        ? "Unable to update resource."
-                        : "Unable to create resource."
+                    "Unable to complete the resource operation."
                 )
             );
         } finally {
@@ -373,6 +522,7 @@ export default function OwnerDashboard() {
         setEditingResourceId(resource.id);
         setShowForm(true);
         setResourceError("");
+        setResourceUploadProgress("");
     }
 
     function resetResourceForm() {
@@ -390,6 +540,7 @@ export default function OwnerDashboard() {
         setEditingResourceId(null);
         setShowForm(false);
         setResourceError("");
+        setResourceUploadProgress("");
     }
 
     async function handleRequest(bookingId, decision) {
@@ -687,24 +838,24 @@ export default function OwnerDashboard() {
 
                             {!editingResourceId && (
                                 <div className="resource-inspection-section">
-                                    <h3>Optional Photo Preview</h3>
+                                    <h3>Resource Photos</h3>
 
                                     <p>
-                                        Select six photos to preview them during
-                                        this session. They are not uploaded or
-                                        saved by the current backend.
+                                        Add six photos to your resource gallery.
+                                        The FRONT photo will be the primary image.
                                     </p>
 
                                     <p>
-                                        Angles: Front, Back, Left, Right, Top
-                                        and Bottom.
+                                        Required views: Front, Back, Left, Right,
+                                        Top and Bottom.
                                     </p>
 
                                     {resourceInspectionImages ? (
                                         <div>
                                             <p>
                                                 <CheckCircle size={16} />
-                                                Six-angle photo preview ready.
+                                                Six photos selected and ready
+                                                for upload.
                                             </p>
 
                                             <button
@@ -729,7 +880,7 @@ export default function OwnerDashboard() {
                                             }}
                                         >
                                             <Camera size={16} />
-                                            Select Preview Photos
+                                            Select Six Photos
                                         </button>
                                     )}
 
@@ -748,14 +899,21 @@ export default function OwnerDashboard() {
                                     )}
 
                                     <p className="owner-muted">
-                                        Resource images cannot be saved until
-                                        the backend provides an upload endpoint.
+                                        Images are uploaded after the resource
+                                        is created. Keep this form open if an
+                                        upload needs to be retried.
                                     </p>
                                 </div>
                             )}
 
+                            {resourceUploadProgress && (
+                                <p className="owner-muted" role="status">
+                                    {resourceUploadProgress}
+                                </p>
+                            )}
+
                             {resourceError && (
-                                <p className="owner-error-message">
+                                <p className="owner-error-message" role="alert">
                                     {resourceError}
                                 </p>
                             )}
@@ -769,13 +927,16 @@ export default function OwnerDashboard() {
                                         ? "Saving..."
                                         : editingResourceId
                                             ? "Save Changes"
-                                            : "Publish Resource"}
+                                            : hasPendingResourceUpload
+                                                ? "Retry Photo Upload"
+                                                : "Publish Resource"}
                                 </button>
 
                                 <button
                                     type="button"
                                     className="cancel-button"
                                     onClick={resetResourceForm}
+                                    disabled={submittingResource}
                                 >
                                     Cancel
                                 </button>
@@ -801,7 +962,7 @@ export default function OwnerDashboard() {
                         </div>
                     </div>
 
-                    {resourceError && (
+                    {resourceError && !showForm && (
                         <p className="owner-error-message">{resourceError}</p>
                     )}
 
@@ -1020,7 +1181,7 @@ export default function OwnerDashboard() {
                                                     }
                                                 >
                                                     <Camera size={15} />
-                                                    Initial Inspection (Demo)
+                                                    Initial Inspection
                                                 </button>
                                             )}
 
@@ -1035,7 +1196,7 @@ export default function OwnerDashboard() {
                                                     }
                                                 >
                                                     <Camera size={15} />
-                                                    Final Inspection (Demo)
+                                                    Final Inspection
                                                 </button>
                                             )}
 
@@ -1054,49 +1215,45 @@ export default function OwnerDashboard() {
                                             )}
                                         </div>
 
-                                        {activeInspection?.bookingId ===
-                                            request.id && (
-                                                <InspectionCapture
-                                                    reportType={
-                                                        activeInspection.reportType
-                                                    }
-                                                    onCancel={() =>
-                                                        setActiveInspection(null)
-                                                    }
-                                                    onComplete={({
-                                                        reportType,
-                                                        description,
-                                                        images,
-                                                    }) => {
-                                                        setInspectionsByBooking(
-                                                            (previous) => ({
-                                                                ...previous,
-                                                                [request.id]: {
-                                                                    ...previous[
-                                                                    request.id
-                                                                    ],
-                                                                    [reportType]: {
-                                                                        description,
-                                                                        images,
-                                                                    },
+                                        {activeInspection?.bookingId === request.id && (
+                                            <InspectionCapture
+                                                bookingId={request.id}
+                                                reportType={activeInspection.reportType}
+                                                onCancel={() =>
+                                                    setActiveInspection(null)
+                                                }
+                                                onComplete={({
+                                                    reportType,
+                                                    description,
+                                                    images,
+                                                    reportId,
+                                                    savedToBackend,
+                                                }) => {
+                                                    setInspectionsByBooking(
+                                                        (previous) => ({
+                                                            ...previous,
+                                                            [request.id]: {
+                                                                ...previous[request.id],
+                                                                [reportType]: {
+                                                                    description,
+                                                                    images,
+                                                                    reportId,
+                                                                    savedToBackend,
                                                                 },
-                                                            })
-                                                        );
+                                                            },
+                                                        })
+                                                    );
 
-                                                        setSuccessMessage(
-                                                            `${reportType === "initial"
-                                                                ? "Initial"
-                                                                : "Final"
-                                                            } inspection completed. Images are held in browser memory only.`
-                                                        );
+                                                    setSuccessMessage(
+                                                        `${reportType === "initial" ? "Initial" : "Final"} inspection saved successfully.`
+                                                    );
 
-                                                        setActiveInspection(null);
-                                                    }}
-                                                />
-                                            )}
+                                                    setActiveInspection(null);
+                                                }}
+                                            />
+                                        )}
 
-                                        {activeComparisonBooking ===
-                                            request.id &&
+                                        {activeComparisonBooking === request.id &&
                                             hasBothInspections && (
                                                 <InspectionComparison
                                                     initialInspection={
@@ -1156,9 +1313,10 @@ export default function OwnerDashboard() {
                 </section>
 
                 <p className="owner-demo-note">
-                    Resources and booking requests are connected to the
-                    OpenBench backend. Inspection comparisons are currently
-                    session-only demos and are not saved to the server.
+                    Resources, resource images and booking requests are connected
+                    to the OpenBench backend. Inspection reports and their
+                    uploaded photos are sent to the backend. Inspection
+                    comparison results currently remain session-only.
                 </p>
             </main>
         </div>
