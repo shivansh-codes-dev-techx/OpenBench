@@ -59,7 +59,7 @@ export default function Login() {
         <h1>Welcome back</h1>
 
         <p className="auth-subtitle">
-          Sign in to discover and share campus resources.
+          Students and provisioned resource owners can sign in here.
         </p>
 
         <form onSubmit={handleSubmit}>

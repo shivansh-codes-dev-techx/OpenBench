@@ -12,7 +12,6 @@ export default function Register() {
     full_name: "",
     email: "",
     password: "",
-    role: "STUDENT",
     institution: "",
   });
 
@@ -94,18 +93,17 @@ export default function Register() {
             onChange={handleChange}
           />
 
-          <label>Account type</label>
-          <select name="role" value={form.role} onChange={handleChange}>
-            <option value="STUDENT">Student</option>
-            <option value="OWNER">Resource Owner</option>
-          </select>
-
           {error && <p className="auth-error">{error}</p>}
 
           <button type="submit" disabled={loading}>
             {loading ? "Creating account..." : "Create account"}
           </button>
         </form>
+
+        <p className="auth-footer">
+          Resource owners are added by an OpenBench administrator. If you have
+          an owner account, sign in instead.
+        </p>
 
         <p className="auth-footer">
           Already registered? <Link to="/login">Sign in</Link>

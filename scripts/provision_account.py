@@ -5,7 +5,8 @@ from getpass import getpass
 
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
 from app.database import SessionLocal
@@ -16,6 +17,58 @@ from app.models.user import User
 class OwnerDetails(BaseModel):
     full_name: str = Field(min_length=2, max_length=100)
     email: EmailStr
+    institution: str | None = Field(default=None, max_length=150)
+
+
+def provision_account(
+    db: Session,
+    *,
+    full_name: str,
+    email: str,
+    password: str,
+    role: UserRole,
+    institution: str | None = None,
+) -> User:
+    try:
+        details = OwnerDetails(
+            full_name=full_name.strip(),
+            email=email.strip(),
+            institution=institution.strip() if institution else None,
+        )
+    except ValidationError:
+        raise ValueError("Invalid account details") from None
+
+    if role not in (UserRole.OWNER, UserRole.ADMIN):
+        raise ValueError("Only OWNER or ADMIN accounts can be provisioned")
+    if not 8 <= len(password) <= 128:
+        raise ValueError("Password must be between 8 and 128 characters")
+
+    normalized_email = str(details.email).lower()
+    user = User(
+        full_name=details.full_name,
+        email=normalized_email,
+        hashed_password=hash_password(password),
+        role=role,
+        institution=details.institution,
+        is_active=True,
+    )
+
+    try:
+        with db.begin():
+            existing = db.scalar(
+                select(User.id).where(User.email == normalized_email)
+            )
+            if existing is not None:
+                raise ValueError("An account with that email already exists")
+
+            db.add(user)
+            db.flush()
+    except IntegrityError:
+        raise ValueError(
+            "An account with that email already exists"
+        ) from None
+
+    return user
 
 
 def main() -> None:
@@ -25,44 +78,36 @@ def main() -> None:
     role = UserRole(args.role)
 
     try:
-        details = OwnerDetails(
-            full_name=input("Owner full name: ").strip(),
-            email=input("Owner email: ").strip(),
-        )
-    except ValidationError as exc:
-        raise SystemExit(f"Invalid owner details: {exc}") from None
+        full_name = input("Account holder full name: ").strip()
+        email = input("Account email: ").strip()
+        institution = input("Institution (optional): ").strip() or None
+    except (EOFError, KeyboardInterrupt):
+        raise SystemExit("\nAccount provisioning cancelled") from None
 
-    password = getpass("Temporary password (8-128 characters): ")
-    confirmation = getpass("Confirm temporary password: ")
+    password = getpass("Password (8-128 characters): ")
+    confirmation = getpass("Confirm password: ")
     if password != confirmation:
         raise SystemExit("Passwords do not match")
-    if not 8 <= len(password) <= 128:
-        raise SystemExit("Password must be between 8 and 128 characters")
 
-    email = str(details.email).lower()
-    with SessionLocal() as db:
-        existing = db.scalar(select(User.id).where(User.email == email))
-        if existing is not None:
-            raise SystemExit("An account with that email already exists")
+    try:
+        with SessionLocal() as db:
+            user = provision_account(
+                db,
+                full_name=full_name,
+                email=email,
+                password=password,
+                role=role,
+                institution=institution,
+            )
+            user_id = user.id
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+    except SQLAlchemyError:
+        raise SystemExit(
+            "Account provisioning failed because the database operation failed"
+        ) from None
 
-        user = User(
-            full_name=details.full_name,
-            email=email,
-            hashed_password=hash_password(password),
-            role=role,
-            is_active=True,
-        )
-        db.add(user)
-        try:
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            raise SystemExit(
-                "Owner provisioning failed because the account already exists"
-            ) from None
-        db.refresh(user)
-
-    print(f"Provisioned {role.value} account {email} (id {user.id})")
+    print(f"Provisioned {role.value} account (user id {user_id}).")
 
 
 if __name__ == "__main__":

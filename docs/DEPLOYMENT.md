@@ -63,16 +63,23 @@ data migration is required. Do not run the SQLite-only
 initial migration to `base` drops the application tables and their data; do not
 run it against production as a routine rollback.
 
-Public registration creates student accounts only. After applying migrations,
-trusted operators can provision owner and initial admin accounts interactively
-using the configured database environment:
+Public registration creates student accounts only. Resource owners cannot
+select a public Owner signup option; trusted operators provision their accounts
+interactively using the configured database. The password and confirmation are
+entered through hidden prompts:
 
 ```shell
 python -m scripts.provision_account OWNER
-python -m scripts.provision_account ADMIN
 ```
 
-The password is entered through a hidden prompt, not a command-line argument.
+Use `ADMIN` only when provisioning an authorized administrator. The command
+validates the name/email, normalizes email casing, rejects duplicates, hashes
+the password with the application's password utility, and commits the user in
+a transaction. It does not print passwords, database URLs, or signing secrets.
+Run it from the deployed backend revision with the intended database configured;
+for Render from outside its network, use the PostgreSQL external connection URL
+in a secure environment prompt and never paste it into a command or shell
+history.
 
 SQLite remains the local fallback. On a new local database, use the same
 `python -m alembic upgrade head` command. The existing SQLite baseline upgrade
@@ -83,7 +90,10 @@ only; see [the SQLite procedure](./BASELINE_SQLITE_MIGRATION.md).
 
 Configure the Vercel project to use `frontend/` as its root directory. The
 frontend's `package.json` defines `npm run build`; Vite's default output
-directory is `dist`. Set this build-time environment variable for production:
+directory is `dist`. `frontend/vercel.json` rewrites SPA paths to the Vite
+entry point so direct loads and refreshes of routes such as `/login` and
+`/owner/dashboard` do not return 404. Set this build-time environment variable
+for production:
 
 | Variable | Required value |
 | --- | --- |
