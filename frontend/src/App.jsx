@@ -6,6 +6,13 @@ import { useAuth } from "./context/useAuth";
 
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import {
+    VerificationPending,
+    VerifyEmail,
+    ForgotPassword,
+    ResetPassword,
+} from "./pages/auth/AuthSupport";
+
 import StudentDashboard from "./pages/StudentDashboard";
 import OwnerDashboard from "./pages/OwnerDashboard";
 import ResourceDetails from "./pages/ResourceDetails";
@@ -52,6 +59,24 @@ function App() {
 
                     <Route path="/login" element={<Login />} />
                     <Route path="/register" element={<Register />} />
+
+                    {/* Authentication support previews */}
+                    <Route
+                        path="/verification-pending"
+                        element={<VerificationPending />}
+                    />
+                    <Route
+                        path="/verify-email"
+                        element={<VerifyEmail />}
+                    />
+                    <Route
+                        path="/forgot-password"
+                        element={<ForgotPassword />}
+                    />
+                    <Route
+                        path="/reset-password"
+                        element={<ResetPassword />}
+                    />
 
                     <Route
                         path="/student/dashboard"

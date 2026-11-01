@@ -19,8 +19,13 @@ export function AuthProvider({ children }) {
             .then((response) => {
                 setUser(response.data?.user ?? response.data);
             })
-            .catch(() => {
-                localStorage.removeItem("openbench_token");
+            .catch((error) => {
+                console.error("Session restore failed:", error);
+
+                if (error.status === 401 || error.status === 403) {
+                    localStorage.removeItem("openbench_token");
+                }
+
                 setUser(null);
             })
             .finally(() => {

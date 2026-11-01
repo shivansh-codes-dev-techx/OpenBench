@@ -1,26 +1,33 @@
 # OpenBench Frontend
 
-The frontend is a React application built with Vite. Project-wide setup,
-environment configuration, API documentation, database notes, and production
-prerequisites are documented in the repository-root `README.md`.
+React frontend for the OpenBench campus resource-sharing platform, built with Vite.
 
-From this directory, install the locked dependencies and start the development
-server with:
+Project-wide setup, environment configuration, API documentation, database notes, and production prerequisites are documented in the repository-root README.md.
 
-```text
-npm ci
-npm run dev
-```
+## Local development
 
-The frontend reads `VITE_API_BASE_URL` at build time. Set it to the address of
-the running OpenBench backend when the default local address is not suitable.
+Install dependencies using npm ci.
 
-Available verification commands are:
+Copy .env.example to .env and set VITE_API_BASE_URL to your reachable OpenBench API URL. The local example uses http://127.0.0.1:8000.
 
-```text
-npm run lint
-npm run build
-```
+Make sure the backend CORS allowlist includes your frontend origin and port.
 
-The backend's local `create_all` initialization command is not a database
-migration strategy and is not a production deployment process.
+Start the frontend using npm run dev.
+
+## Available checks
+
+- npm run lint — runs Oxlint.
+- npm run build — creates the production build.
+- npm run preview — serves the production build locally.
+
+There is currently no frontend test script.
+
+The frontend reads VITE_API_BASE_URL at build time. Configure it before creating a production build.
+
+## Backend integration limits
+
+The current backend supports resource creation and editing as JSON, but does not expose resource image upload or image retrieval routes, email verification, or password reset endpoints.
+
+Photo selection and inspection comparison UI currently remain session-only previews and do not persist to the backend.
+
+The backend's local create_all initialization command is not a database migration strategy or a production deployment process.

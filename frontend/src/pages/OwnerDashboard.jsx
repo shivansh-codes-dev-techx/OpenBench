@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import InspectionComparison from "../components/inspection/InspectionComparison";
 
 import {
     LayoutDashboard,
@@ -22,7 +23,58 @@ import {
 
 import { useAuth } from "../context/useAuth";
 import { apiRequest, formatApiError } from "../api/client";
+import ResourceImage from "../components/ResourceImage";
+import InspectionCapture from "../components/inspection/InspectionCapture";
 import "./OwnerDashboard.css";
+
+const RESOURCE_IMAGE_ANGLES = [
+    "FRONT",
+    "BACK",
+    "LEFT",
+    "RIGHT",
+    "TOP",
+    "BOTTOM",
+];
+
+function getResourceId(response) {
+    const visited = new Set();
+
+    function search(value, depth = 0) {
+        if (!value || typeof value !== "object" || depth > 6) {
+            return null;
+        }
+
+        if (visited.has(value)) return null;
+        visited.add(value);
+
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                const result = search(item, depth + 1);
+                if (result !== null) return result;
+            }
+            return null;
+        }
+
+        if (value.resource_id !== undefined && value.resource_id !== null) {
+            return value.resource_id;
+        }
+
+        for (const key of ["resource", "data", "result"]) {
+            if (value[key] && typeof value[key] === "object") {
+                const result = search(value[key], depth + 1);
+                if (result !== null) return result;
+            }
+        }
+
+        if (value.id !== undefined && value.id !== null) {
+            return value.id;
+        }
+
+        return null;
+    }
+
+    return search(response);
+}
 
 function getResourceIcon(resource) {
     const type = resource.resource_type?.toUpperCase();
@@ -38,6 +90,7 @@ function getResourceIcon(resource) {
 
 function formatDate(value) {
     if (!value) return "Not available";
+
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return "Not available";
 
@@ -50,6 +103,7 @@ function formatDate(value) {
 
 function formatTime(value) {
     if (!value) return "Not available";
+
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return "Not available";
 
@@ -81,6 +135,7 @@ export default function OwnerDashboard() {
     const [requests, setRequests] = useState([]);
     const [search, setSearch] = useState("");
     const [showForm, setShowForm] = useState(false);
+    const [editingResourceId, setEditingResourceId] = useState(null);
 
     const [loadingResources, setLoadingResources] = useState(true);
     const [loadingRequests, setLoadingRequests] = useState(true);
@@ -91,6 +146,23 @@ export default function OwnerDashboard() {
     const [submittingResource, setSubmittingResource] = useState(false);
     const [processingBooking, setProcessingBooking] = useState(null);
     const [successMessage, setSuccessMessage] = useState("");
+
+    const [activeInspection, setActiveInspection] = useState(null);
+
+    const [inspectionsByBooking, setInspectionsByBooking] = useState({});
+    const [activeComparisonBooking, setActiveComparisonBooking] = useState(null);
+
+    const [resourceInspectionImages, setResourceInspectionImages] = useState(null);
+    const [showResourceInspection, setShowResourceInspection] = useState(false);
+    const [resourceUploadProgress, setResourceUploadProgress] = useState("");
+
+    // Retains the created resource ID and completed uploads if an upload fails.
+    // This prevents creating duplicate resources when retrying the image upload.
+    const pendingResourceUploadRef = useRef(null);
+
+    // React state controls the button label during rendering.
+    const [hasPendingResourceUpload, setHasPendingResourceUpload] =
+        useState(false);
 
     const [newResource, setNewResource] = useState({
         title: "",
@@ -126,6 +198,7 @@ export default function OwnerDashboard() {
         }
 
         window.addEventListener("keydown", handleEscape);
+
         return () => window.removeEventListener("keydown", handleEscape);
     }, []);
 
@@ -139,7 +212,6 @@ export default function OwnerDashboard() {
         if (activeElement) moveHighlight(activeElement);
     }, [isNavOpen, activeNav]);
 
-    // Initial data loading: state updates occur after the API responses.
     useEffect(() => {
         if (!user?.id) return;
 
@@ -164,6 +236,7 @@ export default function OwnerDashboard() {
                 })
                 .catch((error) => {
                     console.error("Owner resources error:", error);
+
                     if (!cancelled) {
                         setResourceError(
                             formatApiError(error, "Unable to load resources.")
@@ -189,6 +262,7 @@ export default function OwnerDashboard() {
                 })
                 .catch((error) => {
                     console.error("Owner booking error:", error);
+
                     if (!cancelled) {
                         setRequestError(
                             formatApiError(error, "Unable to load booking requests.")
@@ -222,6 +296,7 @@ export default function OwnerDashboard() {
                     (resource) => Number(resource.owner_id) === Number(user?.id)
                 )
             );
+
             setResourceError("");
         } catch (error) {
             console.error("Owner resources error:", error);
@@ -264,6 +339,56 @@ export default function OwnerDashboard() {
         (request) => request.status?.toUpperCase() === "APPROVED"
     ).length;
 
+    async function uploadResourceImages(resourceId, imageFiles) {
+        const pending = pendingResourceUploadRef.current;
+
+        if (
+            !pending ||
+            Number(pending.resourceId) !== Number(resourceId)
+        ) {
+            pendingResourceUploadRef.current = {
+                resourceId,
+                uploadedAngles: [],
+            };
+
+            setHasPendingResourceUpload(true);
+        }
+
+        const uploadSession = pendingResourceUploadRef.current;
+
+        for (let index = 0; index < RESOURCE_IMAGE_ANGLES.length; index += 1) {
+            const angle = RESOURCE_IMAGE_ANGLES[index];
+
+            if (uploadSession.uploadedAngles.includes(angle)) {
+                continue;
+            }
+
+            const file = imageFiles[angle];
+
+            if (!file) {
+                throw new Error(`The ${angle} resource photo is missing.`);
+            }
+
+            setResourceUploadProgress(
+                `Uploading ${angle.toLowerCase()} photo (${index + 1}/6)...`
+            );
+
+            const formData = new FormData();
+            formData.append("file", file);
+            formData.append("is_primary", index === 0 ? "true" : "false");
+
+            await apiRequest(`/resources/${resourceId}/images`, {
+                method: "POST",
+                body: formData,
+            });
+
+            uploadSession.uploadedAngles.push(angle);
+        }
+
+        pendingResourceUploadRef.current = null;
+        setHasPendingResourceUpload(false);
+    }
+
     async function handleAddResource(event) {
         event.preventDefault();
 
@@ -271,6 +396,7 @@ export default function OwnerDashboard() {
             setSubmittingResource(true);
             setResourceError("");
             setSuccessMessage("");
+            setResourceUploadProgress("");
 
             const payload = {
                 title: newResource.title.trim(),
@@ -281,10 +407,59 @@ export default function OwnerDashboard() {
                 usage_rules: newResource.usage_rules.trim(),
             };
 
-            await apiRequest("/resources", {
-                method: "POST",
-                body: JSON.stringify(payload),
-            });
+            let resourceId = editingResourceId;
+
+            if (editingResourceId) {
+                await apiRequest(`/resources/${editingResourceId}`, {
+                    method: "PATCH",
+                    body: JSON.stringify(payload),
+                });
+            } else {
+                const pending = pendingResourceUploadRef.current;
+
+                // If resource creation already succeeded but image uploads failed,
+                // retry uploads against that resource instead of creating another.
+                if (
+                    pending &&
+                    pending.title === payload.title &&
+                    Number(pending.ownerId) === Number(user?.id)
+                ) {
+                    resourceId = pending.resourceId;
+                } else {
+                    setResourceUploadProgress("Publishing resource...");
+
+                    const response = await apiRequest("/resources", {
+                        method: "POST",
+                        body: JSON.stringify(payload),
+                    });
+
+                    resourceId = getResourceId(response);
+
+                    if (resourceId === null) {
+                        throw new Error(
+                            "The resource may have been created, but its ID was not returned. Check My Resources before submitting again."
+                        );
+                    }
+
+                    if (resourceInspectionImages) {
+                        pendingResourceUploadRef.current = {
+                            resourceId,
+                            title: payload.title,
+                            ownerId: user?.id,
+                            uploadedAngles: [],
+                        };
+
+                        setHasPendingResourceUpload(true);
+                    }
+                }
+
+                if (resourceInspectionImages) {
+                    await uploadResourceImages(
+                        resourceId,
+                        resourceInspectionImages
+                    );
+                }
+            }
 
             setNewResource({
                 title: "",
@@ -295,16 +470,77 @@ export default function OwnerDashboard() {
                 usage_rules: "",
             });
 
+            setResourceInspectionImages(null);
+            setShowResourceInspection(false);
+            setEditingResourceId(null);
             setShowForm(false);
-            setSuccessMessage("Resource published successfully.");
+            setResourceUploadProgress("");
+            pendingResourceUploadRef.current = null;
+            setHasPendingResourceUpload(false);
+
+            setSuccessMessage(
+                editingResourceId
+                    ? "Resource updated successfully."
+                    : resourceInspectionImages
+                        ? "Resource published and all six photos uploaded successfully."
+                        : "Resource published successfully."
+            );
+
             setLoadingResources(true);
             await fetchResources();
         } catch (error) {
-            console.error("Create resource error:", error);
-            setResourceError(formatApiError(error, "Unable to create resource."));
+            console.error(
+                editingResourceId
+                    ? "Update resource error:"
+                    : "Create resource or image upload error:",
+                error
+            );
+
+            setResourceError(
+                formatApiError(
+                    error,
+                    "Unable to complete the resource operation."
+                )
+            );
         } finally {
             setSubmittingResource(false);
         }
+    }
+
+    function startEditingResource(resource) {
+        setNewResource({
+            title: resource.title || "",
+            description: resource.description || "",
+            category: resource.category || "Other",
+            location: resource.location || "",
+            resource_type: resource.resource_type || "EQUIPMENT",
+            usage_rules: resource.usage_rules || "",
+        });
+
+        setResourceInspectionImages(null);
+        setShowResourceInspection(false);
+        setEditingResourceId(resource.id);
+        setShowForm(true);
+        setResourceError("");
+        setResourceUploadProgress("");
+    }
+
+    function resetResourceForm() {
+        setNewResource({
+            title: "",
+            description: "",
+            category: "Electronics",
+            location: "",
+            resource_type: "EQUIPMENT",
+            usage_rules: "",
+        });
+
+        setResourceInspectionImages(null);
+        setShowResourceInspection(false);
+        setEditingResourceId(null);
+        setShowForm(false);
+        setResourceError("");
+        setResourceUploadProgress("");
     }
 
     async function handleRequest(bookingId, decision) {
@@ -431,6 +667,7 @@ export default function OwnerDashboard() {
                         <div className="ob-avatar">
                             {user?.full_name?.charAt(0)?.toUpperCase() || "O"}
                         </div>
+
                         <div>
                             <strong>{user?.full_name || "Owner"}</strong>
                             <span>Resource Owner</span>
@@ -463,10 +700,21 @@ export default function OwnerDashboard() {
 
                     <button
                         className="add-resource-button"
-                        onClick={() => setShowForm(!showForm)}
+                        onClick={() => {
+                            if (showForm && editingResourceId === null) {
+                                resetResourceForm();
+                                return;
+                            }
+
+                            resetResourceForm();
+                            setShowForm(true);
+                            setResourceError("");
+                        }}
                     >
                         <Plus size={18} />
-                        Add Resource
+                        {showForm && editingResourceId === null
+                            ? "Close Form"
+                            : "Add Resource"}
                     </button>
                 </header>
 
@@ -483,11 +731,13 @@ export default function OwnerDashboard() {
                         <span>Total Resources</span>
                         <h2>{loadingResources ? "..." : resources.length}</h2>
                     </div>
+
                     <div className="owner-stat-card">
                         <CalendarDays size={22} />
                         <span>Total Requests</span>
                         <h2>{loadingRequests ? "..." : requests.length}</h2>
                     </div>
+
                     <div className="owner-stat-card">
                         <Clock size={22} />
                         <span>Pending Requests</span>
@@ -496,8 +746,13 @@ export default function OwnerDashboard() {
                 </section>
 
                 {showForm && (
-                    <section className="owner-form-section">
-                        <h2>Add a New Resource</h2>
+                    <section className="owner-form-section" id="resource-form">
+                        <h2>
+                            {editingResourceId
+                                ? "Edit Resource"
+                                : "Add a New Resource"}
+                        </h2>
+
                         <form onSubmit={handleAddResource}>
                             <label>Resource name</label>
                             <input
@@ -581,14 +836,107 @@ export default function OwnerDashboard() {
                                 }
                             />
 
+                            {!editingResourceId && (
+                                <div className="resource-inspection-section">
+                                    <h3>Resource Photos</h3>
+
+                                    <p>
+                                        Add six photos to your resource gallery.
+                                        The FRONT photo will be the primary image.
+                                    </p>
+
+                                    <p>
+                                        Required views: Front, Back, Left, Right,
+                                        Top and Bottom.
+                                    </p>
+
+                                    {resourceInspectionImages ? (
+                                        <div>
+                                            <p>
+                                                <CheckCircle size={16} />
+                                                Six photos selected and ready
+                                                for upload.
+                                            </p>
+
+                                            <button
+                                                type="button"
+                                                className="resource-action"
+                                                onClick={() => {
+                                                    setShowResourceInspection(true);
+                                                    setResourceError("");
+                                                }}
+                                            >
+                                                <Camera size={16} />
+                                                Review or Replace Photos
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            className="resource-action"
+                                            onClick={() => {
+                                                setShowResourceInspection(true);
+                                                setResourceError("");
+                                            }}
+                                        >
+                                            <Camera size={16} />
+                                            Select Six Photos
+                                        </button>
+                                    )}
+
+                                    {showResourceInspection && (
+                                        <InspectionCapture
+                                            reportType="initial"
+                                            onCancel={() =>
+                                                setShowResourceInspection(false)
+                                            }
+                                            onComplete={({ images }) => {
+                                                setResourceInspectionImages(images);
+                                                setShowResourceInspection(false);
+                                                setResourceError("");
+                                            }}
+                                        />
+                                    )}
+
+                                    <p className="owner-muted">
+                                        Images are uploaded after the resource
+                                        is created. Keep this form open if an
+                                        upload needs to be retried.
+                                    </p>
+                                </div>
+                            )}
+
+                            {resourceUploadProgress && (
+                                <p className="owner-muted" role="status">
+                                    {resourceUploadProgress}
+                                </p>
+                            )}
+
+                            {resourceError && (
+                                <p className="owner-error-message" role="alert">
+                                    {resourceError}
+                                </p>
+                            )}
+
                             <div className="owner-form-actions">
-                                <button type="submit" disabled={submittingResource}>
-                                    {submittingResource ? "Publishing..." : "Publish Resource"}
+                                <button
+                                    type="submit"
+                                    disabled={submittingResource}
+                                >
+                                    {submittingResource
+                                        ? "Saving..."
+                                        : editingResourceId
+                                            ? "Save Changes"
+                                            : hasPendingResourceUpload
+                                                ? "Retry Photo Upload"
+                                                : "Publish Resource"}
                                 </button>
+
                                 <button
                                     type="button"
                                     className="cancel-button"
-                                    onClick={() => setShowForm(false)}
+                                    onClick={resetResourceForm}
+                                    disabled={submittingResource}
                                 >
                                     Cancel
                                 </button>
@@ -603,6 +951,7 @@ export default function OwnerDashboard() {
                             <p className="owner-eyebrow">YOUR LISTINGS</p>
                             <h2>My Resources</h2>
                         </div>
+
                         <div className="owner-search">
                             <Search size={17} />
                             <input
@@ -613,7 +962,7 @@ export default function OwnerDashboard() {
                         </div>
                     </div>
 
-                    {resourceError && (
+                    {resourceError && !showForm && (
                         <p className="owner-error-message">{resourceError}</p>
                     )}
 
@@ -627,18 +976,28 @@ export default function OwnerDashboard() {
                                 const Icon = getResourceIcon(resource);
 
                                 return (
-                                    <article className="owner-resource-card" key={resource.id}>
-                                        <div className="owner-resource-icon">
-                                            <Icon size={27} />
-                                        </div>
+                                    <article
+                                        className="owner-resource-card"
+                                        key={resource.id}
+                                    >
+                                        <ResourceImage
+                                            resource={resource}
+                                            fallbackIcon={<Icon size={42} />}
+                                            className="owner-resource-image"
+                                            height={150}
+                                        />
+
                                         <span className="owner-resource-category">
                                             {resource.category}
                                         </span>
+
                                         <h3>{resource.title}</h3>
+
                                         <p className="owner-resource-location">
                                             <MapPin size={15} />
                                             {resource.location}
                                         </p>
+
                                         <span
                                             className={
                                                 resource.is_active
@@ -646,8 +1005,20 @@ export default function OwnerDashboard() {
                                                     : "owner-status unavailable-status"
                                             }
                                         >
-                                            {resource.is_active ? "Available" : "Unavailable"}
+                                            {resource.is_active
+                                                ? "Available"
+                                                : "Unavailable"}
                                         </span>
+
+                                        <button
+                                            type="button"
+                                            className="resource-action"
+                                            onClick={() =>
+                                                startEditingResource(resource)
+                                            }
+                                        >
+                                            Edit Resource
+                                        </button>
                                     </article>
                                 );
                             })}
@@ -693,44 +1064,75 @@ export default function OwnerDashboard() {
 
                     <div className="request-list">
                         {loadingRequests && (
-                            <p className="owner-muted">Loading booking requests...</p>
+                            <p className="owner-muted">
+                                Loading booking requests...
+                            </p>
                         )}
 
                         {!loadingRequests &&
                             requests.map((request) => {
-                                const resource = resourceMap.get(Number(request.resource_id));
-                                const status = request.status?.toUpperCase() || "UNKNOWN";
+                                const resource = resourceMap.get(
+                                    Number(request.resource_id)
+                                );
+
+                                const status =
+                                    request.status?.toUpperCase() || "UNKNOWN";
+
                                 const isPending = status === "PENDING";
-                                const isProcessing = processingBooking === request.id;
+                                const isProcessing =
+                                    processingBooking === request.id;
+
+                                const bookingInspections =
+                                    inspectionsByBooking[request.id];
+
+                                const hasBothInspections = Boolean(
+                                    bookingInspections?.initial &&
+                                    bookingInspections?.final
+                                );
 
                                 return (
-                                    <article className="request-card" key={request.id}>
+                                    <article
+                                        className="request-card"
+                                        key={request.id}
+                                    >
                                         <div className="request-details">
                                             <h3>
                                                 {resource?.title ||
                                                     `Resource #${request.resource_id}`}
                                             </h3>
-                                            <p>Requested by Student #{request.user_id}</p>
+
+                                            <p>
+                                                Requested by Student #{request.user_id}
+                                            </p>
+
                                             <span>
                                                 <CalendarDays size={14} />
                                                 {formatDate(request.start_at)}
                                             </span>
+
                                             <span>
                                                 <Clock size={14} />
-                                                {formatTime(request.start_at)} – {formatTime(request.end_at)}
+                                                {formatTime(request.start_at)} –{" "}
+                                                {formatTime(request.end_at)}
                                             </span>
+
                                             <p>
-                                                <strong>Purpose:</strong> {request.purpose}
+                                                <strong>Purpose:</strong>{" "}
+                                                {request.purpose}
                                             </p>
+
                                             {request.reason && (
                                                 <p>
-                                                    <strong>Decision note:</strong> {request.reason}
+                                                    <strong>Decision note:</strong>{" "}
+                                                    {request.reason}
                                                 </p>
                                             )}
                                         </div>
 
                                         <div className="request-actions">
-                                            <span className={`request-status ${status.toLowerCase()}`}>
+                                            <span
+                                                className={`request-status ${status.toLowerCase()}`}
+                                            >
                                                 {getStatusLabel(status)}
                                             </span>
 
@@ -739,29 +1141,162 @@ export default function OwnerDashboard() {
                                                     <button
                                                         className="approve-button"
                                                         disabled={isProcessing}
-                                                        onClick={() => handleRequest(request.id, "APPROVED")}
+                                                        onClick={() =>
+                                                            handleRequest(
+                                                                request.id,
+                                                                "APPROVED"
+                                                            )
+                                                        }
                                                     >
                                                         <CheckCircle size={15} />
-                                                        {isProcessing ? "Processing..." : "Approve"}
+                                                        {isProcessing
+                                                            ? "Processing..."
+                                                            : "Approve"}
                                                     </button>
+
                                                     <button
                                                         className="reject-button"
                                                         disabled={isProcessing}
-                                                        onClick={() => handleRequest(request.id, "REJECTED")}
+                                                        onClick={() =>
+                                                            handleRequest(
+                                                                request.id,
+                                                                "REJECTED"
+                                                            )
+                                                        }
                                                     >
                                                         <XCircle size={15} />
                                                         Reject
                                                     </button>
                                                 </>
                                             )}
+
+                                            {status === "APPROVED" && (
+                                                <button
+                                                    className="approve-button"
+                                                    onClick={() =>
+                                                        setActiveInspection({
+                                                            bookingId: request.id,
+                                                            reportType: "initial",
+                                                        })
+                                                    }
+                                                >
+                                                    <Camera size={15} />
+                                                    Initial Inspection
+                                                </button>
+                                            )}
+
+                                            {status === "IN_USE" && (
+                                                <button
+                                                    className="approve-button"
+                                                    onClick={() =>
+                                                        setActiveInspection({
+                                                            bookingId: request.id,
+                                                            reportType: "final",
+                                                        })
+                                                    }
+                                                >
+                                                    <Camera size={15} />
+                                                    Final Inspection
+                                                </button>
+                                            )}
+
+                                            {hasBothInspections && (
+                                                <button
+                                                    type="button"
+                                                    className="approve-button"
+                                                    onClick={() =>
+                                                        setActiveComparisonBooking(
+                                                            request.id
+                                                        )
+                                                    }
+                                                >
+                                                    Compare Inspections
+                                                </button>
+                                            )}
                                         </div>
+
+                                        {activeInspection?.bookingId === request.id && (
+                                            <InspectionCapture
+                                                bookingId={request.id}
+                                                reportType={activeInspection.reportType}
+                                                onCancel={() =>
+                                                    setActiveInspection(null)
+                                                }
+                                                onComplete={({
+                                                    reportType,
+                                                    description,
+                                                    images,
+                                                    reportId,
+                                                    savedToBackend,
+                                                }) => {
+                                                    setInspectionsByBooking(
+                                                        (previous) => ({
+                                                            ...previous,
+                                                            [request.id]: {
+                                                                ...previous[request.id],
+                                                                [reportType]: {
+                                                                    description,
+                                                                    images,
+                                                                    reportId,
+                                                                    savedToBackend,
+                                                                },
+                                                            },
+                                                        })
+                                                    );
+
+                                                    setSuccessMessage(
+                                                        `${reportType === "initial" ? "Initial" : "Final"} inspection saved successfully.`
+                                                    );
+
+                                                    setActiveInspection(null);
+                                                }}
+                                            />
+                                        )}
+
+                                        {activeComparisonBooking === request.id &&
+                                            hasBothInspections && (
+                                                <InspectionComparison
+                                                    initialInspection={
+                                                        bookingInspections.initial
+                                                    }
+                                                    finalInspection={
+                                                        bookingInspections.final
+                                                    }
+                                                    reviewed={
+                                                        bookingInspections.reviewed ||
+                                                        false
+                                                    }
+                                                    onReviewed={() => {
+                                                        setInspectionsByBooking(
+                                                            (previous) => ({
+                                                                ...previous,
+                                                                [request.id]: {
+                                                                    ...previous[
+                                                                    request.id
+                                                                    ],
+                                                                    reviewed: true,
+                                                                },
+                                                            })
+                                                        );
+                                                    }}
+                                                    onClose={() =>
+                                                        setActiveComparisonBooking(
+                                                            null
+                                                        )
+                                                    }
+                                                />
+                                            )}
                                     </article>
                                 );
                             })}
 
-                        {!loadingRequests && !requestError && requests.length === 0 && (
-                            <p className="owner-muted">No booking requests yet.</p>
-                        )}
+                        {!loadingRequests &&
+                            !requestError &&
+                            requests.length === 0 && (
+                                <p className="owner-muted">
+                                    No booking requests yet.
+                                </p>
+                            )}
                     </div>
 
                     <button
@@ -778,7 +1313,10 @@ export default function OwnerDashboard() {
                 </section>
 
                 <p className="owner-demo-note">
-                    Resources and booking requests are connected to the OpenBench backend.
+                    Resources, resource images and booking requests are connected
+                    to the OpenBench backend. Inspection reports and their
+                    uploaded photos are sent to the backend. Inspection
+                    comparison results currently remain session-only.
                 </p>
             </main>
         </div>

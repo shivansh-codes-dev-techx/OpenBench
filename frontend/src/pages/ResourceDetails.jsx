@@ -15,12 +15,9 @@ import {
     RefreshCw,
 } from "lucide-react";
 
-import { formatApiError } from "../api/client";
+import { apiRequest, formatApiError } from "../api/client";
+import ResourceImage from "../components/ResourceImage";
 import "./ResourceDetails.css";
-
-const API_BASE_URL = (
-    import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
-).replace(/\/$/, "");
 
 function getResourceIcon(resource) {
     const type = resource?.resource_type?.toUpperCase();
@@ -64,33 +61,21 @@ export default function ResourceDetails() {
         try {
             setError("");
 
-            const response = await fetch(
-                `${API_BASE_URL}/resources/${id}`,
-                { signal }
-            );
-
-            if (response.status === 404) {
-                setResource(null);
-                setError(
-                    "This resource could not be found or is no longer available."
-                );
-                return;
-            }
-
-            if (!response.ok) {
-                throw new Error(
-                    `Unable to load resource (${response.status}).`
-                );
-            }
-
-            const data = await response.json();
+            const data = await apiRequest(`/resources/${id}`, { signal });
             setResource(data);
         } catch (err) {
             if (err.name === "AbortError") return;
 
             console.error("Resource details error:", err);
 
-            setError(formatApiError(err, "Unable to connect to the server."));
+            setError(
+                err.status === 404
+                    ? "This resource could not be found or is no longer available."
+                    : formatApiError(
+                        err,
+                        "Unable to connect to the server."
+                    )
+            );
         }
     }, [id]);
 
@@ -174,9 +159,12 @@ export default function ResourceDetails() {
             </Link>
 
             <section className="details-card">
-                <div className="details-icon">
-                    {getResourceIcon(resource)}
-                </div>
+                <ResourceImage
+                    resource={resource}
+                    fallbackIcon={getResourceIcon(resource)}
+                    className="details-resource-image"
+                    height={320}
+                />
 
                 <span className="details-category">
                     {resource.category}

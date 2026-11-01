@@ -23,20 +23,35 @@ import {
 
 import { useAuth } from "../context/useAuth";
 import { apiRequest, formatApiError } from "../api/client";
+import ResourceImage from "../components/ResourceImage";
 import "./StudentDashboard.css";
 
-const API_BASE_URL = (
-    import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
-).replace(/\/$/, "");
+// ==================================================
+// RESOURCE HELPERS
+// ==================================================
 
 function getResourceIcon(resource) {
     const type = resource.resource_type?.toUpperCase();
     const category = resource.category?.toLowerCase() || "";
     const title = resource.title?.toLowerCase() || "";
 
-    if (type === "SPACE") return Armchair;
-    if (title.includes("camera") || category.includes("photography")) return Camera;
-    if (title.includes("projector") || title.includes("monitor")) return Monitor;
+    if (type === "SPACE") {
+        return Armchair;
+    }
+
+    if (
+        title.includes("camera") ||
+        category.includes("photography")
+    ) {
+        return Camera;
+    }
+
+    if (
+        title.includes("projector") ||
+        title.includes("monitor")
+    ) {
+        return Monitor;
+    }
 
     return Laptop;
 }
@@ -45,7 +60,10 @@ function formatDateTime(value) {
     if (!value) return "Not available";
 
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "Not available";
+
+    if (Number.isNaN(date.getTime())) {
+        return "Not available";
+    }
 
     return date.toLocaleString("en-IN", {
         dateStyle: "medium",
@@ -59,10 +77,13 @@ function getStatusClass(status) {
         case "IN_USE":
         case "RETURNED":
             return "approved";
+
         case "REJECTED":
             return "rejected";
+
         case "PENDING":
             return "pending";
+
         default:
             return "unknown";
     }
@@ -70,18 +91,29 @@ function getStatusClass(status) {
 
 function getSavedReportFlags() {
     try {
-        return JSON.parse(localStorage.getItem("openbench_report_flags") || "{}");
+        return JSON.parse(
+            localStorage.getItem("openbench_report_flags") || "{}"
+        );
     } catch {
         return {};
     }
 }
 
+// ==================================================
+// STUDENT DASHBOARD
+// ==================================================
+
 export default function StudentDashboard() {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
 
+    // --------------------------------------------------
+    // STATE
+    // --------------------------------------------------
+
     const [isNavOpen, setIsNavOpen] = useState(false);
     const [activeNav, setActiveNav] = useState("overview");
+
     const navRef = useRef(null);
 
     const [resources, setResources] = useState([]);
@@ -98,27 +130,27 @@ export default function StudentDashboard() {
 
     const [actionLoading, setActionLoading] = useState({});
     const [actionMessages, setActionMessages] = useState({});
-    const [reportFlags, setReportFlags] = useState(getSavedReportFlags);
 
-    // Initial API loading is handled directly by this effect.
+    const [reportFlags, setReportFlags] = useState(
+        getSavedReportFlags
+    );
+
+    // --------------------------------------------------
+    // LOAD DASHBOARD DATA
+    // --------------------------------------------------
+
     useEffect(() => {
         let cancelled = false;
 
         async function loadDashboard() {
-            const resourceRequest = fetch(
-                `${API_BASE_URL}/resources?skip=0&limit=100`
+            const resourceRequest = apiRequest(
+                "/resources?skip=0&limit=100"
             )
-                .then(async (response) => {
-                    if (!response.ok) {
-                        throw new Error(
-                            `Unable to load resources (${response.status}).`
-                        );
-                    }
-
-                    const data = await response.json();
-
+                .then((data) => {
                     if (!Array.isArray(data)) {
-                        throw new Error("Unexpected resource response from server.");
+                        throw new Error(
+                            "Unexpected resource response from server."
+                        );
                     }
 
                     if (!cancelled) {
@@ -128,16 +160,23 @@ export default function StudentDashboard() {
                 })
                 .catch((err) => {
                     console.error("Resource fetching error:", err);
-                    if (!cancelled) setError(formatApiError(err));
+
+                    if (!cancelled) {
+                        setError(formatApiError(err));
+                    }
                 })
                 .finally(() => {
-                    if (!cancelled) setLoading(false);
+                    if (!cancelled) {
+                        setLoading(false);
+                    }
                 });
 
             const bookingRequest = apiRequest("/bookings/me")
                 .then((response) => {
                     if (!Array.isArray(response.data)) {
-                        throw new Error("Unexpected booking response from server.");
+                        throw new Error(
+                            "Unexpected booking response from server."
+                        );
                     }
 
                     if (!cancelled) {
@@ -147,13 +186,21 @@ export default function StudentDashboard() {
                 })
                 .catch((err) => {
                     console.error("Booking fetching error:", err);
-                    if (!cancelled) setBookingError(formatApiError(err));
+
+                    if (!cancelled) {
+                        setBookingError(formatApiError(err));
+                    }
                 })
                 .finally(() => {
-                    if (!cancelled) setBookingsLoading(false);
+                    if (!cancelled) {
+                        setBookingsLoading(false);
+                    }
                 });
 
-            await Promise.all([resourceRequest, bookingRequest]);
+            await Promise.all([
+                resourceRequest,
+                bookingRequest,
+            ]);
         }
 
         void loadDashboard();
@@ -163,20 +210,20 @@ export default function StudentDashboard() {
         };
     }, []);
 
+    // --------------------------------------------------
+    // REFRESH RESOURCES
+    // --------------------------------------------------
+
     const fetchResources = useCallback(async () => {
         try {
-            const response = await fetch(
-                `${API_BASE_URL}/resources?skip=0&limit=100`
+            const data = await apiRequest(
+                "/resources?skip=0&limit=100"
             );
 
-            if (!response.ok) {
-                throw new Error(`Unable to load resources (${response.status}).`);
-            }
-
-            const data = await response.json();
-
             if (!Array.isArray(data)) {
-                throw new Error("Unexpected resource response from server.");
+                throw new Error(
+                    "Unexpected resource response from server."
+                );
             }
 
             setResources(data);
@@ -189,12 +236,18 @@ export default function StudentDashboard() {
         }
     }, []);
 
+    // --------------------------------------------------
+    // REFRESH BOOKINGS
+    // --------------------------------------------------
+
     const fetchBookings = useCallback(async () => {
         try {
             const response = await apiRequest("/bookings/me");
 
             if (!Array.isArray(response.data)) {
-                throw new Error("Unexpected booking response from server.");
+                throw new Error(
+                    "Unexpected booking response from server."
+                );
             }
 
             setBookings(response.data);
@@ -207,9 +260,15 @@ export default function StudentDashboard() {
         }
     }, []);
 
+    // --------------------------------------------------
+    // SIDEBAR EVENTS
+    // --------------------------------------------------
+
     useEffect(() => {
         function handleEscape(event) {
-            if (event.key === "Escape") setIsNavOpen(false);
+            if (event.key === "Escape") {
+                setIsNavOpen(false);
+            }
         }
 
         function handleOutsideClick(event) {
@@ -237,7 +296,11 @@ export default function StudentDashboard() {
         setIsNavOpen(false);
 
         if (section === "overview") {
-            window.scrollTo({ top: 0, behavior: "smooth" });
+            window.scrollTo({
+                top: 0,
+                behavior: "smooth",
+            });
+
             return;
         }
 
@@ -247,11 +310,20 @@ export default function StudentDashboard() {
         });
     }
 
-    const firstName = user?.full_name?.trim()?.split(" ")[0] || "Student";
+    // --------------------------------------------------
+    // FILTERS AND COUNTS
+    // --------------------------------------------------
+
+    const firstName =
+        user?.full_name?.trim()?.split(" ")[0] || "Student";
 
     const categories = [
         "All",
-        ...new Set(resources.map((resource) => resource.category).filter(Boolean)),
+        ...new Set(
+            resources
+                .map((resource) => resource.category)
+                .filter(Boolean)
+        ),
     ];
 
     const filteredResources = resources.filter((resource) => {
@@ -263,31 +335,49 @@ export default function StudentDashboard() {
             resource.category?.toLowerCase().includes(searchText);
 
         const matchesCategory =
-            category === "All" || resource.category === category;
+            category === "All" ||
+            resource.category === category;
 
         return matchesSearch && matchesCategory;
     });
 
     const approvedBookings = bookings.filter(
-        (booking) => booking.status?.toUpperCase() === "APPROVED"
+        (booking) =>
+            booking.status?.toUpperCase() === "APPROVED"
     );
 
     const pendingBookings = bookings.filter(
-        (booking) => booking.status?.toUpperCase() === "PENDING"
+        (booking) =>
+            booking.status?.toUpperCase() === "PENDING"
     );
 
     const rejectedBookings = bookings.filter(
-        (booking) => booking.status?.toUpperCase() === "REJECTED"
+        (booking) =>
+            booking.status?.toUpperCase() === "REJECTED"
     );
 
     const resourceMap = new Map(
-        resources.map((resource) => [Number(resource.id), resource])
+        resources.map((resource) => [
+            Number(resource.id),
+            resource,
+        ])
     );
+
+    // --------------------------------------------------
+    // AUTHENTICATION
+    // --------------------------------------------------
 
     function handleLogout() {
         logout();
-        navigate("/login", { replace: true });
+
+        navigate("/login", {
+            replace: true,
+        });
     }
+
+    // --------------------------------------------------
+    // CONDITION REPORT HELPERS
+    // --------------------------------------------------
 
     function saveReportFlag(bookingId, reportType) {
         const updated = {
@@ -306,14 +396,29 @@ export default function StudentDashboard() {
         );
     }
 
-    function setMessage(bookingId, message, type = "success") {
+    function setMessage(
+        bookingId,
+        message,
+        type = "success"
+    ) {
         setActionMessages((previous) => ({
             ...previous,
-            [bookingId]: { message, type },
+            [bookingId]: {
+                message,
+                type,
+            },
         }));
     }
 
-    async function runBookingAction(bookingId, actionName, callback) {
+    // --------------------------------------------------
+    // BOOKING ACTIONS
+    // --------------------------------------------------
+
+    async function runBookingAction(
+        bookingId,
+        actionName,
+        callback
+    ) {
         try {
             setActionLoading((previous) => ({
                 ...previous,
@@ -340,6 +445,7 @@ export default function StudentDashboard() {
 
     async function submitConditionReport(booking, reportType) {
         const isInitial = reportType === "initial";
+
         const reportLabel = isInitial ? "initial" : "final";
 
         const description = window.prompt(
@@ -356,6 +462,7 @@ export default function StudentDashboard() {
                 "Please enter at least 5 characters in the condition description.",
                 "error"
             );
+
             return;
         }
 
@@ -391,34 +498,54 @@ export default function StudentDashboard() {
     }
 
     async function handleCheckIn(booking) {
-        await runBookingAction(booking.id, "check-in", async () => {
-            await apiRequest(`/bookings/${booking.id}/check-in`, {
-                method: "POST",
-            });
+        await runBookingAction(
+            booking.id,
+            "check-in",
+            async () => {
+                await apiRequest(
+                    `/bookings/${booking.id}/check-in`,
+                    {
+                        method: "POST",
+                    }
+                );
 
-            setMessage(
-                booking.id,
-                "Check-in successful! Your booking is now active."
-            );
-        });
+                setMessage(
+                    booking.id,
+                    "Check-in successful! Your booking is now active."
+                );
+            }
+        );
     }
 
     async function handleCheckOut(booking) {
-        await runBookingAction(booking.id, "check-out", async () => {
-            await apiRequest(`/bookings/${booking.id}/check-out`, {
-                method: "POST",
-            });
+        await runBookingAction(
+            booking.id,
+            "check-out",
+            async () => {
+                await apiRequest(
+                    `/bookings/${booking.id}/check-out`,
+                    {
+                        method: "POST",
+                    }
+                );
 
-            setMessage(
-                booking.id,
-                "Check-out successful! The resource has been returned."
-            );
-        });
+                setMessage(
+                    booking.id,
+                    "Check-out successful! The resource has been returned."
+                );
+            }
+        );
     }
+
+    // --------------------------------------------------
+    // BOOKING ACTION RENDERING
+    // --------------------------------------------------
 
     function renderBookingActions(booking) {
         const status = booking.status?.toUpperCase();
+
         const flags = reportFlags[booking.id] || {};
+
         const busy = actionLoading[booking.id];
 
         if (status === "PENDING") {
@@ -429,7 +556,9 @@ export default function StudentDashboard() {
             );
         }
 
-        if (status === "REJECTED") return null;
+        if (status === "REJECTED") {
+            return null;
+        }
 
         if (status === "APPROVED") {
             return (
@@ -438,9 +567,12 @@ export default function StudentDashboard() {
                         <button
                             className="resource-action"
                             disabled={!!busy}
-                            onClick={() => submitConditionReport(booking, "initial")}
+                            onClick={() =>
+                                submitConditionReport(booking, "initial")
+                            }
                         >
                             <ClipboardCheck size={16} />
+
                             {busy === "initial-report"
                                 ? "Submitting..."
                                 : "Initial Condition Report"}
@@ -458,7 +590,10 @@ export default function StudentDashboard() {
                         onClick={() => handleCheckIn(booking)}
                     >
                         <LogIn size={16} />
-                        {busy === "check-in" ? "Checking in..." : "Check In"}
+
+                        {busy === "check-in"
+                            ? "Checking in..."
+                            : "Check In"}
                     </button>
 
                     {!flags.initial && (
@@ -477,9 +612,12 @@ export default function StudentDashboard() {
                         <button
                             className="resource-action"
                             disabled={!!busy}
-                            onClick={() => submitConditionReport(booking, "final")}
+                            onClick={() =>
+                                submitConditionReport(booking, "final")
+                            }
                         >
                             <ClipboardCheck size={16} />
+
                             {busy === "final-report"
                                 ? "Submitting..."
                                 : "Final Condition Report"}
@@ -497,7 +635,10 @@ export default function StudentDashboard() {
                         onClick={() => handleCheckOut(booking)}
                     >
                         <CheckOutIcon size={16} />
-                        {busy === "check-out" ? "Checking out..." : "Check Out"}
+
+                        {busy === "check-out"
+                            ? "Checking out..."
+                            : "Check Out"}
                     </button>
 
                     {!flags.final && (
@@ -521,12 +662,23 @@ export default function StudentDashboard() {
         return null;
     }
 
+    // ==================================================
+    // DASHBOARD UI
+    // ==================================================
+
     return (
         <div className="dashboard">
+            {/* MOBILE MENU BUTTON */}
             <button
                 className={`ob-menu-btn ${isNavOpen ? "is-open" : ""}`}
-                onClick={() => setIsNavOpen((previous) => !previous)}
-                aria-label={isNavOpen ? "Close navigation" : "Open navigation"}
+                onClick={() =>
+                    setIsNavOpen((previous) => !previous)
+                }
+                aria-label={
+                    isNavOpen
+                        ? "Close navigation"
+                        : "Open navigation"
+                }
                 aria-expanded={isNavOpen}
                 aria-controls="student-navigation"
             >
@@ -535,12 +687,14 @@ export default function StudentDashboard() {
                 <span />
             </button>
 
+            {/* SIDEBAR BACKDROP */}
             <div
                 className={`ob-nav-scrim ${isNavOpen ? "visible" : ""}`}
                 onClick={() => setIsNavOpen(false)}
                 aria-hidden="true"
             />
 
+            {/* SIDEBAR */}
             <aside
                 ref={navRef}
                 id="student-navigation"
@@ -554,7 +708,9 @@ export default function StudentDashboard() {
                     OpenBench.
                 </Link>
 
-                <p className="ob-menu-label">STUDENT MENU</p>
+                <p className="ob-menu-label">
+                    STUDENT MENU
+                </p>
 
                 <nav className="ob-links">
                     <button
@@ -585,92 +741,152 @@ export default function StudentDashboard() {
                 <div className="ob-sidebar-bottom">
                     <div className="ob-profile">
                         <div className="ob-avatar">
-                            {user?.full_name?.charAt(0)?.toUpperCase() || "S"}
+                            {user?.full_name
+                                ?.charAt(0)
+                                ?.toUpperCase() || "S"}
                         </div>
+
                         <div>
-                            <strong>{user?.full_name || "Student"}</strong>
-                            <span>{user?.role || "STUDENT"} Account</span>
+                            <strong>
+                                {user?.full_name || "Student"}
+                            </strong>
+
+                            <span>
+                                {user?.role || "STUDENT"} Account
+                            </span>
                         </div>
                     </div>
 
-                    <button className="ob-logout" onClick={handleLogout}>
+                    <button
+                        className="ob-logout"
+                        onClick={handleLogout}
+                    >
                         <LogOut size={18} />
                         Logout
                     </button>
                 </div>
             </aside>
 
-            <main className="dashboard-main" id="overview">
+            {/* MAIN DASHBOARD */}
+            <main
+                className="dashboard-main"
+                id="overview"
+            >
+                {/* HEADER */}
                 <header className="dashboard-header">
                     <div>
-                        <p className="eyebrow">STUDENT PORTAL</p>
-                        <h1>Welcome back, {firstName}!</h1>
+                        <p className="eyebrow">
+                            STUDENT PORTAL
+                        </p>
+
+                        <h1>
+                            Welcome back, {firstName}!
+                        </h1>
+
                         <p className="muted">
                             Discover resources. Share opportunities. Make more happen.
                         </p>
                     </div>
                 </header>
 
+                {/* STATISTICS */}
                 <section className="stats-grid">
                     <div className="stat-card">
                         <span>Available Resources</span>
                         <h2>{resources.length}</h2>
                         <p>Across your campus</p>
                     </div>
+
                     <div className="stat-card">
                         <span>My Bookings</span>
-                        <h2>{bookingsLoading ? "..." : bookings.length}</h2>
+
+                        <h2>
+                            {bookingsLoading
+                                ? "..."
+                                : bookings.length}
+                        </h2>
+
                         <p>All your booking requests</p>
                     </div>
+
                     <div className="stat-card">
                         <span>Approved Bookings</span>
-                        <h2>{bookingsLoading ? "..." : approvedBookings.length}</h2>
+
+                        <h2>
+                            {bookingsLoading
+                                ? "..."
+                                : approvedBookings.length}
+                        </h2>
+
                         <p>Your approved requests</p>
                     </div>
                 </section>
 
-                <section className="resource-section" id="resources">
+                {/* RESOURCE MARKETPLACE */}
+                <section
+                    className="resource-section"
+                    id="resources"
+                >
                     <div className="section-heading">
                         <div>
-                            <p className="eyebrow">CAMPUS MARKETPLACE</p>
+                            <p className="eyebrow">
+                                CAMPUS MARKETPLACE
+                            </p>
+
                             <h2>Explore Resources</h2>
+
                             <p className="muted">
                                 Find equipment and spaces available on your campus.
                             </p>
                         </div>
                     </div>
 
+                    {/* SEARCH AND CATEGORY */}
                     <div className="resource-toolbar">
                         <div className="search-box">
                             <Search size={19} />
+
                             <input
                                 type="text"
                                 placeholder="Search resources or locations..."
                                 value={search}
-                                onChange={(event) => setSearch(event.target.value)}
+                                onChange={(event) =>
+                                    setSearch(event.target.value)
+                                }
                             />
                         </div>
 
                         <select
                             value={category}
-                            onChange={(event) => setCategory(event.target.value)}
+                            onChange={(event) =>
+                                setCategory(event.target.value)
+                            }
                         >
                             {categories.map((item) => (
-                                <option key={item} value={item}>
-                                    {item === "All" ? "All Categories" : item}
+                                <option
+                                    key={item}
+                                    value={item}
+                                >
+                                    {item === "All"
+                                        ? "All Categories"
+                                        : item}
                                 </option>
                             ))}
                         </select>
                     </div>
 
+                    {/* RESOURCE CARDS */}
                     <div className="resource-grid">
                         {loading && (
-                            <p className="empty-state">Loading campus resources...</p>
+                            <p className="empty-state">
+                                Loading campus resources...
+                            </p>
                         )}
 
                         {!loading && error && (
                             <div className="empty-state">
                                 <p>{error}</p>
+
                                 <button
                                     className="resource-action"
                                     onClick={() => {
@@ -691,16 +907,26 @@ export default function StudentDashboard() {
                                 const Icon = getResourceIcon(resource);
 
                                 return (
-                                    <article className="resource-card" key={resource.id}>
-                                        <div className="resource-icon">
-                                            <Icon size={28} />
-                                        </div>
+                                    <article
+                                        className="resource-card"
+                                        key={resource.id}
+                                    >
+                                        <ResourceImage
+                                            resource={resource}
+                                            fallbackIcon={<Icon size={42} />}
+                                            className="student-resource-image"
+                                            height={190}
+                                        />
 
                                         <div className="resource-card-info">
                                             <span className="resource-category">
                                                 {resource.category}
                                             </span>
-                                            <h3>{resource.title}</h3>
+
+                                            <h3>
+                                                {resource.title}
+                                            </h3>
+
                                             <p className="resource-location">
                                                 <MapPin size={15} />
                                                 {resource.location}
@@ -711,10 +937,13 @@ export default function StudentDashboard() {
                                             <span className="availability available">
                                                 Available
                                             </span>
+
                                             <button
                                                 className="resource-action"
                                                 onClick={() =>
-                                                    navigate(`/resources/${resource.id}`)
+                                                    navigate(
+                                                        `/resources/${resource.id}`
+                                                    )
                                                 }
                                             >
                                                 View Details
@@ -725,20 +954,30 @@ export default function StudentDashboard() {
                                 );
                             })}
 
-                        {!loading && !error && filteredResources.length === 0 && (
-                            <p className="empty-state">
-                                {resources.length === 0
-                                    ? "No resources have been added to the marketplace yet."
-                                    : "No resources found. Try another search."}
-                            </p>
-                        )}
+                        {!loading &&
+                            !error &&
+                            filteredResources.length === 0 && (
+                                <p className="empty-state">
+                                    {resources.length === 0
+                                        ? "No resources have been added to the marketplace yet."
+                                        : "No resources found. Try another search."}
+                                </p>
+                            )}
                     </div>
                 </section>
 
-                <section className="booking-preview" id="bookings">
+                {/* BOOKINGS */}
+                <section
+                    className="booking-preview"
+                    id="bookings"
+                >
                     <div>
-                        <p className="eyebrow">YOUR ACTIVITY</p>
+                        <p className="eyebrow">
+                            YOUR ACTIVITY
+                        </p>
+
                         <h2>My Bookings</h2>
+
                         <p className="muted">
                             Track your resource booking requests and their status.
                         </p>
@@ -746,10 +985,21 @@ export default function StudentDashboard() {
 
                     {!bookingsLoading && !bookingError && (
                         <div className="booking-status-summary">
-                            <span>Total: {bookings.length}</span>
-                            <span>Pending: {pendingBookings.length}</span>
-                            <span>Approved: {approvedBookings.length}</span>
-                            <span>Rejected: {rejectedBookings.length}</span>
+                            <span>
+                                Total: {bookings.length}
+                            </span>
+
+                            <span>
+                                Pending: {pendingBookings.length}
+                            </span>
+
+                            <span>
+                                Approved: {approvedBookings.length}
+                            </span>
+
+                            <span>
+                                Rejected: {rejectedBookings.length}
+                            </span>
                         </div>
                     )}
 
@@ -763,6 +1013,7 @@ export default function StudentDashboard() {
                     {!bookingsLoading && bookingError && (
                         <div className="booking-placeholder">
                             <p>{bookingError}</p>
+
                             <button
                                 className="resource-action"
                                 onClick={() => {
@@ -777,76 +1028,101 @@ export default function StudentDashboard() {
                         </div>
                     )}
 
-                    {!bookingsLoading && !bookingError && bookings.length === 0 && (
-                        <div className="booking-placeholder">
-                            <CalendarDays size={22} />
-                            <span>You haven't made any bookings yet.</span>
-                        </div>
-                    )}
+                    {!bookingsLoading &&
+                        !bookingError &&
+                        bookings.length === 0 && (
+                            <div className="booking-placeholder">
+                                <CalendarDays size={22} />
 
-                    {!bookingsLoading && !bookingError && bookings.length > 0 && (
-                        <div className="booking-list">
-                            {bookings.map((booking) => {
-                                const resource = resourceMap.get(
-                                    Number(booking.resource_id)
-                                );
-                                const status = booking.status?.toUpperCase();
+                                <span>
+                                    You haven't made any bookings yet.
+                                </span>
+                            </div>
+                        )}
 
-                                return (
-                                    <article className="booking-item" key={booking.id}>
-                                        <div className="booking-item-header">
-                                            <div>
-                                                <span className="booking-id">
-                                                    Booking #{booking.id}
+                    {!bookingsLoading &&
+                        !bookingError &&
+                        bookings.length > 0 && (
+                            <div className="booking-list">
+                                {bookings.map((booking) => {
+                                    const resource = resourceMap.get(
+                                        Number(booking.resource_id)
+                                    );
+
+                                    const status =
+                                        booking.status?.toUpperCase();
+
+                                    return (
+                                        <article
+                                            className="booking-item"
+                                            key={booking.id}
+                                        >
+                                            <div className="booking-item-header">
+                                                <div>
+                                                    <span className="booking-id">
+                                                        Booking #{booking.id}
+                                                    </span>
+
+                                                    <h3>
+                                                        {resource?.title ||
+                                                            `Resource #${booking.resource_id}`}
+                                                    </h3>
+                                                </div>
+
+                                                <span
+                                                    className={`booking-status ${getStatusClass(status)}`}
+                                                >
+                                                    {status || "UNKNOWN"}
                                                 </span>
-                                                <h3>
-                                                    {resource?.title ||
-                                                        `Resource #${booking.resource_id}`}
-                                                </h3>
                                             </div>
-                                            <span
-                                                className={`booking-status ${getStatusClass(status)}`}
-                                            >
-                                                {status || "UNKNOWN"}
-                                            </span>
-                                        </div>
 
-                                        <p>
-                                            <CalendarDays size={15} />
-                                            Start: {formatDateTime(booking.start_at)}
-                                        </p>
-                                        <p>
-                                            <Clock size={15} />
-                                            End: {formatDateTime(booking.end_at)}
-                                        </p>
-                                        <p className="booking-purpose">
-                                            <strong>Purpose:</strong> {booking.purpose}
-                                        </p>
-
-                                        {booking.reason && (
-                                            <p className="booking-reason">
-                                                <strong>Owner's note:</strong> {booking.reason}
+                                            <p>
+                                                <CalendarDays size={15} />
+                                                Start:{" "}
+                                                {formatDateTime(booking.start_at)}
                                             </p>
-                                        )}
 
-                                        {actionMessages[booking.id] && (
-                                            <p
-                                                className={
-                                                    actionMessages[booking.id].type === "error"
-                                                        ? "booking-reason"
-                                                        : "lifecycle-complete"
-                                                }
-                                            >
-                                                {actionMessages[booking.id].message}
+                                            <p>
+                                                <Clock size={15} />
+                                                End:{" "}
+                                                {formatDateTime(booking.end_at)}
                                             </p>
-                                        )}
 
-                                        {renderBookingActions(booking)}
-                                    </article>
-                                );
-                            })}
-                        </div>
-                    )}
+                                            <p className="booking-purpose">
+                                                <strong>Purpose:</strong>{" "}
+                                                {booking.purpose}
+                                            </p>
+
+                                            {booking.reason && (
+                                                <p className="booking-reason">
+                                                    <strong>
+                                                        Owner's note:
+                                                    </strong>{" "}
+                                                    {booking.reason}
+                                                </p>
+                                            )}
+
+                                            {actionMessages[booking.id] && (
+                                                <p
+                                                    className={
+                                                        actionMessages[booking.id].type ===
+                                                            "error"
+                                                            ? "booking-reason"
+                                                            : "lifecycle-complete"
+                                                    }
+                                                >
+                                                    {
+                                                        actionMessages[booking.id].message
+                                                    }
+                                                </p>
+                                            )}
+
+                                            {renderBookingActions(booking)}
+                                        </article>
+                                    );
+                                })}
+                            </div>
+                        )}
 
                     <button
                         className="resource-action"
@@ -862,6 +1138,7 @@ export default function StudentDashboard() {
                     </button>
                 </section>
 
+                {/* FOOTER */}
                 <p className="demo-note">
                     Resources and student booking history are loaded from the
                     OpenBench backend.
