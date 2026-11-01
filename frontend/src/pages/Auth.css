@@ -254,6 +254,10 @@
   font-size: 13px;
 }
 
+.auth-input-wrap--plain input {
+  padding-left: 13px;
+}
+
 .auth-input-wrap input::placeholder {
   color: #a7b1c1;
 }

@@ -54,49 +54,87 @@ export default function Register() {
           Join your campus resource-sharing community.
         </p>
 
-        <form onSubmit={handleSubmit}>
-          <label>Full name</label>
-          <input
-            name="full_name"
-            placeholder="Your full name"
-            value={form.full_name}
-            onChange={handleChange}
-            required
-          />
+        <form onSubmit={handleSubmit} className="auth-form">
+          <div className="auth-field">
+            <label htmlFor="register-full-name">Full name</label>
+            <div className="auth-input-wrap auth-input-wrap--plain">
+              <input
+                id="register-full-name"
+                name="full_name"
+                placeholder="Your full name"
+                value={form.full_name}
+                onChange={handleChange}
+                autoComplete="name"
+                required
+              />
+            </div>
+          </div>
 
-          <label>Email address</label>
-          <input
-            type="email"
-            name="email"
-            placeholder="you@example.com"
-            value={form.email}
-            onChange={handleChange}
-            required
-          />
+          <div className="auth-field">
+            <label htmlFor="register-email">Email address</label>
+            <div className="auth-input-wrap auth-input-wrap--plain">
+              <input
+                id="register-email"
+                type="email"
+                name="email"
+                placeholder="you@example.com"
+                value={form.email}
+                onChange={handleChange}
+                autoComplete="email"
+                required
+              />
+            </div>
+          </div>
 
-          <label>Password</label>
-          <input
-            type="password"
-            name="password"
-            placeholder="Create a password"
-            value={form.password}
-            onChange={handleChange}
-            minLength={8}
-            required
-          />
+          <div className="auth-field">
+            <label htmlFor="register-password">Password</label>
+            <div className="auth-input-wrap auth-input-wrap--plain">
+              <input
+                id="register-password"
+                type="password"
+                name="password"
+                placeholder="Create a password"
+                value={form.password}
+                onChange={handleChange}
+                autoComplete="new-password"
+                minLength={8}
+                required
+              />
+            </div>
+          </div>
 
-          <label>Institution</label>
-          <input
-            name="institution"
-            placeholder="Your college or university"
-            value={form.institution}
-            onChange={handleChange}
-          />
+          <div className="auth-field">
+            <label htmlFor="register-institution">Institution</label>
+            <div className="auth-input-wrap auth-input-wrap--plain">
+              <input
+                id="register-institution"
+                name="institution"
+                placeholder="Your college or university"
+                value={form.institution}
+                onChange={handleChange}
+                autoComplete="organization"
+              />
+            </div>
+          </div>
 
-          {error && <p className="auth-error">{error}</p>}
+          {error && (
+            <p className="auth-error" role="alert">
+              {error}
+            </p>
+          )}
 
-          <button type="submit" disabled={loading}>
-            {loading ? "Creating account..." : "Create account"}
+          <button type="submit" className="auth-submit" disabled={loading}>
+            {loading ? (
+              <>
+                <span className="auth-spinner" />
+                Creating account...
+              </>
+            ) : (
+              <>
+                Create account
+                <span aria-hidden="true">→</span>
+              </>
+            )}
           </button>
         </form>
 
