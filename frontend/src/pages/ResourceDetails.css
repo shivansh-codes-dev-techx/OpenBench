@@ -1,0 +1,125 @@
+.details-page {
+    min-height: 100vh;
+    padding: 45px 20px;
+    background: #0b1120;
+    color: #f1f5f9;
+    font-family: Inter, system-ui, sans-serif;
+}
+
+.back-link {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    max-width: 750px;
+    margin: 0 auto 25px;
+    color: #93c5fd;
+    text-decoration: none;
+}
+
+.details-card {
+    max-width: 750px;
+    margin: auto;
+    padding: 35px;
+    background: #151f32;
+    border: 1px solid #29374d;
+    border-radius: 16px;
+}
+
+.details-icon {
+    width: 75px;
+    height: 75px;
+    display: grid;
+    place-items: center;
+    color: #60a5fa;
+    background: #1e3a5f;
+    border-radius: 14px;
+    margin-bottom: 22px;
+}
+
+.details-category {
+    color: #60a5fa;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.details-card h1 {
+    margin: 12px 0;
+    font-size: 32px;
+}
+
+.details-description,
+.details-rules p {
+    color: #94a3b8;
+    line-height: 1.7;
+}
+
+.details-info {
+    display: grid;
+    gap: 17px;
+    margin: 30px 0;
+    padding: 22px 0;
+    border-top: 1px solid #334155;
+    border-bottom: 1px solid #334155;
+}
+
+.details-info div {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #cbd5e1;
+}
+
+.details-info svg {
+    color: #60a5fa;
+}
+
+.details-rules {
+    padding: 18px;
+    background: #0f172a;
+    border-radius: 10px;
+}
+
+.details-rules h3 {
+    margin-top: 0;
+}
+
+.details-availability {
+    margin: 22px 0;
+}
+
+.details-available {
+    color: #4ade80;
+}
+
+.details-unavailable {
+    color: #f87171;
+}
+
+.book-resource-button {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 15px;
+    border-radius: 9px;
+    background: #2563eb;
+    color: white;
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.book-resource-button:hover {
+    background: #1d4ed8;
+}
+
+@media (max-width: 500px) {
+    .details-card {
+        padding: 23px;
+    }
+
+    .details-card h1 {
+        font-size: 25px;
+    }
+}

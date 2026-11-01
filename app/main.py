@@ -1,5 +1,5 @@
-from fastapi import FastAPI
-from sqlalchemy import text
+from fastapi import FastAPI, HTTPException, status
+from sqlalchemy import inspect, text
 
 from app.database import engine
 from app.routers import auth
@@ -8,6 +8,23 @@ from app.core.config import settings
 from app.routers import resources
 from app.routers import eligibility
 from app.routers import bookings
+
+
+REQUIRED_TABLES = frozenset(
+    {
+        "users",
+        "resources",
+        "bookings",
+        "eligibility_requirements",
+        "user_qualifications",
+        "condition_reports",
+        "incidents",
+        "waitlist",
+        "activity_logs",
+    }
+)
+
+
 app = FastAPI(
     title="OpenBench API",
     description="Trusted Campus Resource Sharing Platform",
@@ -64,3 +81,28 @@ def health_check():
             "status": "unhealthy",
             "database": "disconnected",
         }
+
+
+@app.get("/ready")
+def readiness_check():
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+            table_names = set(inspect(connection).get_table_names())
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service unavailable",
+        ) from None
+
+    if not REQUIRED_TABLES.issubset(table_names):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service unavailable",
+        )
+
+    return {
+        "success": True,
+        "status": "ready",
+        "database": "ready",
+    }
